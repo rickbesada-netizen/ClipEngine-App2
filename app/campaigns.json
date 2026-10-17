@@ -1,0 +1,101 @@
+[
+  {
+    "id": "tjr",
+    "name": "TJR",
+    "pay": "$1 per 1K views \u00b7 min payout $5 \u00b7 max $1,000 per video \u00b7 10,000 view minimum",
+    "sources": [
+      "https://www.youtube.com/@TJRTrades",
+      "https://www.youtube.com/@TRichesTrades",
+      "https://kick.com/tjr",
+      "https://www.instagram.com/tjr/"
+    ],
+    "hashtags": [
+      "#TJR"
+    ],
+    "extra_tags": [
+      "#trading",
+      "#daytrading",
+      "#stockmarket",
+      "#forex",
+      "#tradingmindset"
+    ],
+    "keywords": [
+      "trade",
+      "trading",
+      "market",
+      "profit",
+      "loss",
+      "account",
+      "funded",
+      "money",
+      "million",
+      "discipline",
+      "strategy",
+      "mindset",
+      "chart",
+      "risk",
+      "stop loss",
+      "entry",
+      "red day",
+      "green day",
+      "broke",
+      "rich",
+      "prop firm",
+      "payout",
+      "scalp",
+      "futures",
+      "nasdaq",
+      "nasdaq futures",
+      "s&p"
+    ],
+    "look_for_short": "funny, memorable or quotable",
+    "look_for": [
+      "Funny moments from TJR's social media accounts",
+      "Memorable quotes from TJR's social media accounts",
+      "Other reactions or memorable moments from TJR's social media accounts"
+    ],
+    "platforms": [
+      "Instagram Reels",
+      "TikTok",
+      "YouTube Shorts"
+    ],
+    "submit_within_min": 30,
+    "rules": [
+      "Every clip must feature TJR",
+      "Post only on Instagram Reels, TikTok or YouTube Shorts",
+      "Your account's audience must be at least 50% USA, Canada, Australia, UK or New Zealand",
+      "Post from a trading-related account, not an unrelated niche",
+      "Captions must include #TJR",
+      "Never show TJR in a negative light",
+      "No logos of any kind on the clip",
+      "No botting, reposts or collab posts to boost views",
+      "No AI-generated content",
+      "Submit each link in Whop Content Rewards within 30 minutes of posting",
+      "Payout starts once the video passes 10,000 views and is approved"
+    ]
+  },
+  {
+    "id": "generic",
+    "name": "Any creator",
+    "pay": "",
+    "sources": [],
+    "hashtags": [],
+    "extra_tags": [],
+    "keywords": [],
+    "look_for_short": "funny, memorable or quotable",
+    "look_for": [
+      "Funny moments",
+      "Strong quotes",
+      "Big reactions"
+    ],
+    "platforms": [
+      "Instagram Reels",
+      "TikTok",
+      "YouTube Shorts"
+    ],
+    "submit_within_min": 0,
+    "rules": [
+      "Check the campaign's own rules before posting"
+    ]
+  }
+]

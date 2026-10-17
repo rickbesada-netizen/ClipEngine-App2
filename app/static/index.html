@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Clip Engine</title>
+<style>
+/* Layout: one working column under a sticky campaign bar; tabs switch between making clips, the clip queue, rules and settings. */
+:root{
+  --bg:#EDF0F3; --surface:#FFFFFF; --ink:#16202A; --muted:#5A6774; --line:#D3DAE1;
+  --accent:#F2C200; --accent-ink:#16202A; --signal:#1D5EA8; --ok:#2E8B57; --bad:#C2413B;
+  --display:"Bahnschrift SemiBold Condensed","Bahnschrift","Arial Narrow",sans-serif;
+  --body:"Segoe UI",system-ui,-apple-system,sans-serif;
+  --mono:"Cascadia Mono",Consolas,ui-monospace,monospace;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#0F151B; --surface:#17202A; --ink:#E5EAEF; --muted:#94A2AF; --line:#283440;
+  --accent:#F5CA1F; --accent-ink:#141A20; --signal:#79AEEA; --ok:#4FBF80; --bad:#E5706A; color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{margin:0}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--body)}
+.bar{position:sticky;top:0;z-index:5;background:var(--surface);border-bottom:3px solid var(--ink)}
+.bar-in{max-width:1280px;margin:0 auto;padding:12px 20px 0;display:flex;flex-direction:column;gap:10px}
+.top{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px}
+h1{font-family:var(--display);font-weight:700;font-size:30px;line-height:1;margin:0;text-transform:uppercase;letter-spacing:.01em}
+h1 span{background:var(--accent);color:var(--accent-ink);padding:0 .15em}
+.camp{display:flex;align-items:center;gap:8px}
+.camp label{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+select,input[type=text],input[type=number],textarea{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:7px 9px}
+textarea{width:100%;resize:vertical}
+:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+.pay{font-size:13px;color:var(--muted)}
+.tabs{display:flex;gap:2px;overflow-x:auto}
+.tabs button{font-family:var(--display);font-weight:700;font-size:17px;letter-spacing:.04em;text-transform:uppercase;background:none;border:0;border-bottom:3px solid transparent;color:var(--muted);padding:6px 14px 8px;cursor:pointer;white-space:nowrap;margin-bottom:-3px}
+.tabs button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--accent)}
+.tabs .n{font-family:var(--mono);font-size:12px;margin-left:4px}
+main{max-width:1280px;margin:0 auto;padding:20px}
+.grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:900px){.grid{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:18px;display:flex;flex-direction:column;gap:12px;min-width:0}
+h2{font-family:var(--display);font-weight:700;font-size:21px;text-transform:uppercase;letter-spacing:.03em;margin:0}
+.hint{color:var(--muted);font-size:13px;margin:0}
+.lbl{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+@media (max-width:640px){.fields{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.btn{font:inherit;font-size:13px;font-weight:600;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:4px;padding:6px 11px;cursor:pointer;text-decoration:none;display:inline-block}
+.btn:hover{border-color:var(--ink)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.go{font-family:var(--display);font-weight:700;font-size:20px;letter-spacing:.04em;text-transform:uppercase;background:var(--accent);color:var(--accent-ink);border:2px solid var(--ink);border-radius:5px;padding:7px 22px;cursor:pointer}
+.go:disabled{opacity:.45}
+.src{display:flex;flex-direction:column;gap:6px}
+.src-row{display:flex;gap:8px;align-items:center;min-width:0}
+.src-row code{flex:1;min-width:0;font-family:var(--mono);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:4px 7px}
+.pick-list{max-height:320px;overflow-y:auto;border:1px solid var(--line);border-radius:4px}
+.pick-list label{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-size:13px}
+.pick-list label:last-child{border-bottom:0}
+.pick-list .d{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.jobs{display:flex;flex-direction:column;gap:10px}
+.job{border:1px solid var(--line);border-radius:5px;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.job .t{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.track{height:7px;background:var(--bg);border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.track i{display:block;height:100%;background:var(--signal);transition:width .4s}
+.job.error .track i{background:var(--bad)} .job.done .track i{background:var(--ok)}
+.job .m{font-size:12.5px;color:var(--muted)} .job.error .m{color:var(--bad)}
+.empty{color:var(--muted);font-size:13px;border:1.5px dashed var(--line);border-radius:6px;padding:16px;margin:0}
+.filters{display:flex;gap:6px;flex-wrap:wrap}
+.chip{font:inherit;font-size:12.5px;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:999px;padding:4px 11px;cursor:pointer}
+.chip[aria-pressed=true]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.due{border-left:4px solid var(--bad);background:color-mix(in srgb,var(--bad) 8%,var(--surface));padding:10px 14px;border-radius:4px;display:flex;flex-direction:column;gap:6px}
+.due b{font-variant-numeric:tabular-nums}
+.clips{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,560px),1fr));gap:16px}
+.clip{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px;display:grid;grid-template-columns:190px minmax(0,1fr);gap:14px}
+@media (max-width:560px){.clip{grid-template-columns:minmax(0,1fr)}}
+.clip video{width:190px;max-width:100%;aspect-ratio:9/16;background:#000;border-radius:6px;object-fit:cover}
+.clip .meta{display:flex;flex-direction:column;gap:8px;min-width:0}
+.clip .src-t{font-size:12.5px;color:var(--muted);overflow-wrap:anywhere}
+.tags{display:flex;flex-wrap:wrap;gap:5px}
+.tag{font-size:11.5px;border:1px solid var(--line);border-radius:3px;padding:1px 7px;color:var(--muted)}
+.tag.st-ready{border-color:var(--signal);color:var(--signal)} .tag.st-posted{border-color:var(--accent);color:var(--ink);background:color-mix(in srgb,var(--accent) 18%,transparent)} .tag.st-submitted{border-color:var(--ok);color:var(--ok)}
+.clip textarea{min-height:80px;font-size:13px}
+.clip input.hook{width:100%}
+details summary{cursor:pointer;color:var(--signal);font-weight:600;font-size:13px}
+.recut{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:8px;align-items:end;margin-top:8px}
+.post{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px;margin-top:8px}
+.posts{display:flex;flex-direction:column;gap:6px;font-size:12.5px}
+.posts .p{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;border:1px solid var(--line);border-radius:4px;padding:6px 8px}
+.posts .late{color:var(--bad);font-weight:600} .posts .okk{color:var(--ok);font-weight:600}
+.posts a{color:var(--signal);overflow-wrap:anywhere}
+.rules{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.notice{border-left:3px solid var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent);padding:8px 12px;margin:0;font-size:13px}
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:var(--surface);padding:9px 14px;border-radius:5px;font-size:13px;z-index:20;max-width:calc(100% - 32px)}
+.mono{font-family:var(--mono);font-size:12px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="bar"><div class="bar-in">
+  <div class="top">
+    <h1><span>Clip</span> Engine</h1>
+    <div class="camp"><label for="campaign">Campaign</label><select id="campaign"></select></div>
+    <span class="pay" id="pay"></span>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="make" aria-selected="true">Find clips</button>
+    <button role="tab" data-tab="clips" aria-selected="false">Clips<span class="n" id="n-clips"></span></button>
+    <button role="tab" data-tab="rules" aria-selected="false">Campaign rules</button>
+    <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
+  </nav>
+</div></div>
+
+<main>
+  <section id="tab-make">
+    <div class="grid">
+      <div class="panel">
+        <h2>1 · What to clip</h2>
+        <div class="src" id="sources"></div>
+        <div id="picker" hidden>
+          <div class="row" style="justify-content:space-between"><span class="lbl" id="picker-title">Recent videos</span><span class="row"><button class="btn" id="pick-all" type="button">Select all</button><button class="btn" id="pick-add" type="button">Add selected</button></span></div>
+          <div class="pick-list" id="pick-list"></div>
+        </div>
+        <label class="lbl" for="urls">Links or files, one per line</label>
+        <textarea id="urls" rows="6" class="mono" placeholder="https://www.youtube.com/watch?v=...&#10;https://kick.com/tjr/videos/...&#10;C:\Users\you\Videos\stream.mp4"></textarea>
+        <div class="fields">
+          <div class="field"><label class="lbl" for="q-n">Clips per video</label><input type="number" id="q-n" min="1" max="20"></div>
+          <div class="field"><label class="lbl" for="q-min">Min seconds</label><input type="number" id="q-min" min="5" max="170"></div>
+          <div class="field"><label class="lbl" for="q-max">Max seconds</label><input type="number" id="q-max" min="10" max="180"></div>
+          <div class="field"><label class="lbl" for="q-layout">Framing</label>
+            <select id="q-layout"><option value="auto">Auto</option><option value="face">Follow face</option><option value="split">Facecam + screen</option><option value="fit">Full frame, blurred bg</option></select></div>
+        </div>
+        <div class="row"><button class="go" id="start" type="button">Find clips</button><span class="hint" id="start-hint"></span></div>
+        <p class="notice" id="caption-warn" hidden>Your ffmpeg can't burn captions, so clips will render without them.</p>
+      </div>
+      <div class="panel">
+        <h2>2 · Progress</h2>
+        <div class="jobs" id="jobs"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-clips" hidden>
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <div id="due"></div>
+      <div class="row" style="justify-content:space-between">
+        <div class="filters" id="filters">
+          <button class="chip" data-f="all" aria-pressed="true">All</button>
+          <button class="chip" data-f="ready" aria-pressed="false">Ready to post</button>
+          <button class="chip" data-f="posted" aria-pressed="false">Posted, not submitted</button>
+          <button class="chip" data-f="submitted" aria-pressed="false">Submitted</button>
+        </div>
+        <button class="btn" id="open-folder" type="button">Open clips folder</button>
+      </div>
+      <div class="clips" id="clips"></div>
+    </div>
+  </section>
+
+  <section id="tab-rules" hidden>
+    <div class="grid">
+      <div class="panel"><h2>Rules</h2><ul class="rules" id="rules"></ul></div>
+      <div class="panel"><h2>What to look for</h2><ul class="rules" id="lookfor"></ul><h2 style="margin-top:8px">Post on</h2><p id="platforms"></p><h2 style="margin-top:8px">Required hashtags</h2><p class="mono" id="reqtags"></p></div>
+    </div>
+  </section>
+
+  <section id="tab-settings" hidden>
+    <div class="grid">
+      <div class="panel">
+        <h2>Quality and speed</h2>
+        <div class="fields" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+          <div class="field"><label class="lbl" for="s-model">Transcription</label>
+            <select id="s-model"><option value="tiny">Fastest (tiny)</option><option value="base">Balanced (base)</option><option value="small">Accurate (small)</option><option value="medium">Most accurate, slow (medium)</option></select></div>
+          <div class="field"><label class="lbl" for="s-height">Download quality</label>
+            <select id="s-height"><option value="720">720p (faster, smaller)</option><option value="1080">1080p (sharper)</option></select></div>
+          <div class="field"><label class="lbl" for="s-captions">Captions</label>
+            <select id="s-captions"><option value="1">Word-by-word captions</option><option value="0">No captions</option></select></div>
+          <div class="field"><label class="lbl" for="s-upper">Caption case</label>
+            <select id="s-upper"><option value="1">UPPERCASE</option><option value="0">Normal case</option></select></div>
+          <div class="field"><label class="lbl" for="s-hook">Hook title</label>
+            <select id="s-hook"><option value="1">Show for first 3 seconds</option><option value="0">Off</option></select></div>
+        </div>
+        <p class="hint">Videos over 30 minutes (streams) only get their most promising parts transcribed, using YouTube's "most replayed" data and loud moments, so a 3-hour stream takes minutes rather than hours.</p>
+      </div>
+      <div class="panel">
+        <h2>Sign-in for downloads</h2>
+        <div class="field"><label class="lbl" for="s-cookies">Use cookies from</label>
+          <select id="s-cookies"><option value="none">Nothing (default)</option><option value="firefox">Firefox</option><option value="chrome">Chrome</option><option value="edge">Edge</option><option value="brave">Brave</option></select></div>
+        <div class="field"><label class="lbl" for="s-cookiefile">Or a cookies.txt file</label><input type="text" id="s-cookiefile" class="mono" placeholder="C:\Users\you\Downloads\cookies.txt"></div>
+        <p class="hint">Only needed if YouTube asks you to prove you're not a bot, or for Instagram. Firefox works most reliably; close it first.</p>
+        <h2 style="margin-top:8px">Free local AI (optional)</h2>
+        <div class="field"><label class="lbl" for="s-ollama">Rate moments with Ollama</label>
+          <select id="s-ollama"><option value="">Off</option></select></div>
+        <p class="hint" id="ollama-hint">Install Ollama from ollama.com and run <span class="mono">ollama pull llama3.2</span> to have a free local model rate each moment and write the hook title. Works without it.</p>
+        <h2 style="margin-top:8px">Disk space</h2>
+        <div class="row"><button class="btn" id="cleanup" type="button">Delete downloaded source videos</button><span class="hint">Finished clips are kept.</span></div>
+      </div>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(() => {
+const $ = s => document.querySelector(s);
+const api = async (path, body, method) => {
+  const r = await fetch(path, { method: method || (body ? 'POST' : 'GET'), headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+  let j = {}; try { j = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(j.error || ('Request failed (' + r.status + ')'));
+  return j;
+};
+function toast(m){ const t = $('#toast'); t.textContent = m; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => t.hidden = true, 2800); }
+async function copy(text){ try { await navigator.clipboard.writeText(text); toast('Copied'); } catch (e) { toast('Copy failed. Select the text and press Ctrl+C.'); } }
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const fmt = s => { s = Math.max(0, s || 0); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = Math.floor(s % 60); return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); };
+const clock = t => new Date(t * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+let S = null, campaign = null, filter = 'all', clipSig = '', jobSig = '';
+let skew = 0;
+
+/* tabs */
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-selected', x === b));
+  ['make', 'clips', 'rules', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== b.dataset.tab);
+  if (b.dataset.tab === 'settings') loadOllama();
+});
+
+/* campaign */
+function setCampaign(id){
+  campaign = S.campaigns.find(c => c.id === id) || S.campaigns[0];
+  $('#campaign').value = campaign.id; $('#pay').textContent = campaign.pay || '';
+  const box = $('#sources'); box.innerHTML = '';
+  if (campaign.sources.length){
+    box.append(el('span', 'lbl', 'Campaign sources'));
+    campaign.sources.forEach(u => {
+      const r = el('div', 'src-row'); r.append(el('code', null, u));
+      const b = el('button', 'btn', 'Browse'); b.type = 'button'; b.onclick = () => browse(u, b); r.append(b);
+      box.append(r);
+    });
+  }
+  const rl = $('#rules'); rl.innerHTML = ''; campaign.rules.forEach(x => rl.append(el('li', null, x)));
+  const lf = $('#lookfor'); lf.innerHTML = ''; campaign.look_for.forEach(x => lf.append(el('li', null, x)));
+  $('#platforms').textContent = campaign.platforms.join(', ');
+  $('#reqtags').textContent = campaign.hashtags.join(' ') || 'None';
+}
+$('#campaign').onchange = e => { setCampaign(e.target.value); api('/api/settings', { campaign: campaign.id }); };
+
+async function browse(url, btn){
+  btn.disabled = true; btn.textContent = 'Loading…';
+  try {
+    const r = await api('/api/list', { url, limit: 20 });
+    const list = $('#pick-list'); list.innerHTML = '';
+    r.items.forEach(it => {
+      const l = el('label'); const c = el('input'); c.type = 'checkbox'; c.value = it.url;
+      l.append(c, el('span', null, it.title || it.url), el('span', 'd', it.duration ? fmt(it.duration) : ''));
+      list.append(l);
+    });
+    $('#picker-title').textContent = 'Recent from ' + url.replace(/^https?:\/\/(www\.)?/, '');
+    $('#picker').hidden = false;
+  } catch (e) { toast(e.message); }
+  btn.disabled = false; btn.textContent = 'Browse';
+}
+$('#pick-all').onclick = () => document.querySelectorAll('#pick-list input').forEach(c => c.checked = true);
+$('#pick-add').onclick = () => {
+  const picked = [...document.querySelectorAll('#pick-list input:checked')].map(c => c.value);
+  const cur = $('#urls').value.trim(); const have = new Set(cur.split(/\n/).map(s => s.trim()));
+  const add = picked.filter(u => !have.has(u));
+  $('#urls').value = (cur ? cur + '\n' : '') + add.join('\n');
+  toast(add.length + ' added');
+};
+
+/* start */
+$('#start').onclick = async () => {
+  const urls = $('#urls').value.split(/\n/).map(s => s.trim()).filter(Boolean);
+  const settings = { clips_per_video: +$('#q-n').value || 4, min_len: +$('#q-min').value || 20, max_len: +$('#q-max').value || 45, layout: $('#q-layout').value };
+  if (settings.max_len <= settings.min_len){ toast('Max seconds must be more than min seconds'); return; }
+  try {
+    await api('/api/settings', { settings, campaign: campaign.id });
+    await api('/api/jobs', { urls, campaign: campaign.id, settings });
+    $('#urls').value = ''; toast(urls.length + ' video' + (urls.length > 1 ? 's' : '') + ' queued'); poll();
+  } catch (e) { toast(e.message); }
+};
+
+/* settings */
+function bindSettings(){
+  const s = S.settings;
+  $('#q-n').value = s.clips_per_video; $('#q-min').value = s.min_len; $('#q-max').value = s.max_len; $('#q-layout').value = s.layout;
+  $('#s-model').value = s.whisper_model; $('#s-height').value = String(s.max_height); $('#s-captions').value = s.captions ? '1' : '0';
+  $('#s-upper').value = (s.caption_style || {}).upper === false ? '0' : '1'; $('#s-hook').value = s.hook_overlay ? '1' : '0';
+  $('#s-cookies').value = s.cookies_browser || 'none'; $('#s-cookiefile').value = s.cookies_file || '';
+  const save = () => api('/api/settings', { settings: {
+    whisper_model: $('#s-model').value, max_height: +$('#s-height').value, captions: $('#s-captions').value === '1',
+    caption_style: { ...(S.settings.caption_style || {}), upper: $('#s-upper').value === '1' }, hook_overlay: $('#s-hook').value === '1',
+    cookies_browser: $('#s-cookies').value, cookies_file: $('#s-cookiefile').value.trim(),
+    use_ollama: !!$('#s-ollama').value, ollama_model: $('#s-ollama').value } }).then(() => toast('Saved')).catch(e => toast(e.message));
+  ['#s-model', '#s-height', '#s-captions', '#s-upper', '#s-hook', '#s-cookies', '#s-cookiefile', '#s-ollama'].forEach(id => $(id).onchange = save);
+}
+async function loadOllama(){
+  try {
+    const r = await api('/api/ollama'); const sel = $('#s-ollama'); const cur = S.settings.use_ollama ? S.settings.ollama_model : '';
+    sel.innerHTML = '<option value="">Off</option>' + r.models.map(m => `<option value="${m.replace(/"/g, '')}">${m.replace(/</g, '')}</option>`).join('');
+    sel.value = r.models.includes(cur) ? cur : '';
+    $('#ollama-hint').hidden = r.models.length > 0;
+  } catch (e) {}
+}
+$('#cleanup').onclick = async () => { try { const r = await api('/api/cleanup', {}); toast('Freed ' + r.freed_mb + ' MB'); } catch (e) { toast(e.message); } };
+$('#open-folder').onclick = () => api('/api/open', {}).catch(e => toast(e.message));
+
+/* jobs */
+function renderJobs(){
+  const jobs = S.jobs.slice().reverse();
+  const sig = JSON.stringify(jobs.map(j => [j.id, j.status, j.progress, j.message, j.title]));
+  if (sig === jobSig) return; jobSig = sig;
+  const box = $('#jobs'); box.innerHTML = '';
+  if (!jobs.length){ box.append(el('p', 'empty', 'Pick videos from the sources on the left, or paste links, then press Find clips. Each video shows its progress here.')); return; }
+  jobs.forEach(j => {
+    const d = el('div', 'job ' + j.status);
+    d.append(el('div', 't', j.title || j.url));
+    const tr = el('div', 'track'); const i = el('i'); i.style.width = Math.round((j.status === 'done' ? 1 : j.progress || 0) * 100) + '%'; tr.append(i); d.append(tr);
+    d.append(el('div', 'm', ({ queued: 'Waiting', running: '', cancelling: 'Stopping…', stopped: '', error: '', done: '' }[j.status] || '') + (j.status === 'queued' ? '' : (j.message || ''))));
+    const row = el('div', 'row');
+    const act = (label, a) => { const b = el('button', 'btn', label); b.type = 'button'; b.onclick = () => api(`/api/jobs/${j.id}/${a}`, {}).then(poll).catch(e => toast(e.message)); row.append(b); };
+    if (j.status === 'running' || j.status === 'queued') act('Stop', 'cancel');
+    if (j.status === 'error' || j.status === 'stopped') act('Retry', 'retry');
+    if (!['running', 'cancelling'].includes(j.status)) act('Remove', 'remove');
+    d.append(row); box.append(d);
+  });
+}
+
+/* clips */
+function deadline(p){ const mins = (campaign && campaign.submit_within_min) || 0; return mins ? p.at + mins * 60 : null; }
+function renderDue(){
+  const box = $('#due'); box.innerHTML = '';
+  const now = Date.now() / 1000 - skew;
+  const due = [];
+  S.clips.forEach(c => (c.posts || []).forEach(p => { const d = deadline(p); if (d && !p.submitted) due.push({ c, p, d }); }));
+  if (!due.length) return;
+  const b = el('div', 'due'); b.append(el('strong', null, 'Submit these links in Whop Content Rewards'));
+  due.sort((x, y) => x.d - y.d).forEach(({ c, p, d }) => {
+    const left = d - now; const r = el('div', 'row');
+    r.append(el('b', null, left > 0 ? Math.ceil(left / 60) + ' min left' : 'Overdue'), el('span', null, (p.platform || '') + ' · ' + (c.hook || '').slice(0, 50)));
+    const cp = el('button', 'btn', 'Copy link'); cp.type = 'button'; cp.onclick = () => copy(p.url); r.append(cp);
+    const sb = el('button', 'btn', 'Mark submitted'); sb.type = 'button'; sb.onclick = () => api('/api/clips/' + c.id, { submitted: p.url }).then(poll); r.append(sb);
+    b.append(r);
+  });
+  box.append(b);
+}
+function renderClips(force){
+  const list = S.clips.filter(c => filter === 'all' || c.status === filter);
+  $('#n-clips').textContent = S.clips.length ? String(S.clips.length) : '';
+  const sig = JSON.stringify([filter, list.map(c => [c.id, c.file, c.status, (c.posts || []).length, (c.posts || []).filter(p => p.submitted).length])]);
+  renderDue();
+  if (sig === clipSig && !force) return; clipSig = sig;
+  const box = $('#clips'); box.innerHTML = '';
+  if (!list.length){ box.append(el('p', 'empty', S.clips.length ? 'No clips in this filter.' : 'Finished clips appear here, each with a ready caption, why it was picked, and buttons to track posting and submitting.')); return; }
+  list.forEach(c => box.append(clipCard(c)));
+}
+function clipCard(c){
+  const card = el('div', 'clip');
+  const v = el('video'); v.src = '/clips/' + encodeURIComponent(c.file); v.poster = '/clips/' + encodeURIComponent(c.thumb); v.controls = true; v.preload = 'none'; v.playsInline = true; card.append(v);
+  const m = el('div', 'meta'); card.append(m);
+  const tags = el('div', 'tags');
+  tags.append(el('span', 'tag st-' + c.status, { ready: 'Ready to post', posted: 'Posted', submitted: 'Submitted' }[c.status] || c.status));
+  tags.append(el('span', 'tag', fmt(c.end - c.start) + ' long'), el('span', 'tag', 'from ' + fmt(c.start)), el('span', 'tag', c.layout === 'face' ? 'follows face' : c.layout === 'split' ? 'facecam + screen' : c.layout === 'native' ? 'vertical source' : 'full frame'));
+  (c.reasons || []).forEach(r => tags.append(el('span', 'tag', r)));
+  m.append(tags);
+  m.append(el('div', 'src-t', c.source_title));
+  m.append(el('span', 'lbl', 'Caption'));
+  const ta = el('textarea'); ta.id = 'cap-' + c.id; ta.value = c.caption; ta.onchange = () => api('/api/clips/' + c.id, { caption: ta.value }).then(() => { c.caption = ta.value; toast('Caption saved'); });
+  m.append(ta);
+  const req = (campaign && campaign.hashtags) || [];
+  const missing = req.filter(h => !ta.value.toLowerCase().includes(h.toLowerCase()));
+  if (missing.length) m.append(el('p', 'notice', 'Caption is missing ' + missing.join(' ')));
+  const acts = el('div', 'row');
+  const b1 = el('button', 'btn', 'Copy caption'); b1.type = 'button'; b1.onclick = () => copy(ta.value); acts.append(b1);
+  const b2 = el('button', 'btn', 'Show file'); b2.type = 'button'; b2.onclick = () => api('/api/open', { file: c.file }).catch(e => toast(e.message)); acts.append(b2);
+  const b3 = el('a', 'btn', 'Watch source'); b3.href = c.source_url + (c.source_url.includes('youtube.com/watch') ? '&t=' + Math.floor(c.start) + 's' : ''); b3.target = '_blank'; b3.rel = 'noopener'; acts.append(b3);
+  const b4 = el('button', 'btn', 'Delete'); b4.type = 'button'; b4.onclick = () => { if (b4.dataset.sure){ api('/api/clips/' + c.id, null, 'DELETE').then(poll); } else { b4.dataset.sure = 1; b4.textContent = 'Click again to delete'; } }; acts.append(b4);
+  m.append(acts);
+
+  const posts = el('div', 'posts');
+  (c.posts || []).forEach(p => {
+    const d = deadline(p), now = Date.now() / 1000 - skew;
+    const r = el('div', 'p'); r.append(el('strong', null, p.platform));
+    const a = el('a', null, p.url); a.href = p.url; a.target = '_blank'; a.rel = 'noopener'; r.append(a);
+    if (p.submitted) r.append(el('span', 'okk', 'Submitted'));
+    else if (d){ r.append(el('span', d - now > 0 ? '' : 'late', d - now > 0 ? 'Submit by ' + clock(d) : 'Submission window passed')); const sb = el('button', 'btn', 'Mark submitted'); sb.type = 'button'; sb.onclick = () => api('/api/clips/' + c.id, { submitted: p.url }).then(poll); r.append(sb); }
+    posts.append(r);
+  });
+  m.append(posts);
+
+  const dp = el('details'); dp.append(el('summary', null, 'I posted this'));
+  const pf = el('div', 'post');
+  const sel = el('select'); sel.setAttribute('aria-label', 'Platform'); ((campaign && campaign.platforms) || ['TikTok']).forEach(x => { const o = el('option', null, x); o.value = x; sel.append(o); });
+  const url = el('input'); url.type = 'text'; url.placeholder = 'Paste the post link'; url.setAttribute('aria-label', 'Post link');
+  const sv = el('button', 'btn', 'Save'); sv.type = 'button';
+  sv.onclick = () => { if (!/^https?:\/\//.test(url.value.trim())){ toast('Paste the full post link'); return; } api('/api/clips/' + c.id, { post: { platform: sel.value, url: url.value.trim() } }).then(() => { toast('Logged. Submit it within ' + ((campaign && campaign.submit_within_min) || 30) + ' minutes.'); poll(true); }); };
+  pf.append(sel, url, sv); dp.append(pf); m.append(dp);
+
+  const dr = el('details'); dr.append(el('summary', null, 'Re-cut or change the hook'));
+  const hk = el('input'); hk.type = 'text'; hk.className = 'hook'; hk.value = c.hook || ''; hk.setAttribute('aria-label', 'Hook title');
+  const rc = el('div', 'recut');
+  const mk = (label, val) => { const f = el('div', 'field'); f.append(el('span', 'lbl', label)); const i = el('input'); i.type = 'number'; i.step = '0.1'; i.value = val; f.append(i); rc.append(f); return i; };
+  const st = mk('Start (s)', c.start.toFixed(1)), en = mk('End (s)', c.end.toFixed(1));
+  const lf = el('div', 'field'); lf.append(el('span', 'lbl', 'Framing')); const ls = el('select'); [['auto', 'Auto'], ['face', 'Follow face'], ['split', 'Facecam + screen'], ['fit', 'Full frame']].forEach(([v, t]) => { const o = el('option', null, t); o.value = v; ls.append(o); }); ls.value = c.layout === 'native' ? 'auto' : c.layout; lf.append(ls); rc.append(lf);
+  const rb = el('button', 'btn', 'Re-render'); rb.type = 'button';
+  rb.onclick = async () => { rb.disabled = true; rb.textContent = 'Rendering…'; try { await api('/api/clips/' + c.id + '/rerender', { start: +st.value, end: +en.value, hook: hk.value, layout: ls.value }); toast('Re-rendered'); poll(true); } catch (e) { toast(e.message); rb.disabled = false; rb.textContent = 'Re-render'; } };
+  rc.append(rb);
+  dr.append(el('span', 'lbl', 'Hook title'), hk, rc);
+  m.append(dr);
+  return card;
+}
+document.querySelectorAll('#filters .chip').forEach(b => b.onclick = () => { filter = b.dataset.f; document.querySelectorAll('#filters .chip').forEach(x => x.setAttribute('aria-pressed', x === b)); renderClips(true); });
+
+/* poll */
+let first = true;
+async function poll(force){
+  try {
+    S = await api('/api/state'); skew = Date.now() / 1000 - S.now;
+    if (first){
+      $('#campaign').innerHTML = S.campaigns.map(c => `<option value="${c.id}">${c.name.replace(/</g, '')}</option>`).join('');
+      setCampaign(S.campaign || S.campaigns[0].id); bindSettings(); $('#caption-warn').hidden = S.can_caption; first = false;
+    }
+    renderJobs(); renderClips(force === true);
+  } catch (e) { $('#jobs').innerHTML = ''; $('#jobs').append(el('p', 'empty', 'Lost contact with Clip Engine. Is its window still open?')); }
+}
+poll(); setInterval(poll, 1500);
+})();
+</script>
+</body>
+</html>
