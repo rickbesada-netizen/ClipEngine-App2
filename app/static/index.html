@@ -128,7 +128,7 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
 <div class="bar"><div class="bar-in">
   <div class="top">
     <h1><span>Clip</span> Engine</h1>
-    <div class="camp"><label for="campaign">Campaign</label><select id="campaign"></select></div>
+    <div class="camp"><label for="campaign">Campaign</label><select id="campaign"></select><button class="btn" id="add-camp" type="button">+ Add campaign</button></div>
     <span class="pay" id="pay"></span>
   </div>
   <nav class="tabs" role="tablist">
@@ -172,6 +172,22 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
   <section id="tab-clips" hidden>
     <div style="display:flex;flex-direction:column;gap:14px">
       <div id="due"></div>
+      <div class="panel" id="ytpanel">
+        <div class="row" style="justify-content:space-between"><h2>Post to YouTube</h2><span class="hint" id="yt-watch-state"></span></div>
+        <ol class="steps">
+          <li><b>Make an upload batch.</b> Up to 15 new clips are copied into a folder, each file named with its finished title, so YouTube fills in every title for you.
+            <div class="row" style="margin-top:6px"><button class="go" id="yt-batch" type="button" style="font-size:17px">Make upload batch</button><span class="hint" id="yt-batch-msg"></span></div></li>
+          <li><b>Upload them all at once.</b> <a href="https://studio.youtube.com" target="_blank" rel="noopener">Open YouTube Studio</a>, press Create, then Upload videos, select every file in the folder, and publish.</li>
+          <li><b>One time only:</b> in Studio go to Settings, Upload defaults, and paste this into Description and Tags, so every upload gets the campaign hashtags automatically.
+            <details id="yt-defaults-box"><summary>Show the text</summary>
+              <span class="lbl">Description</span><textarea id="yt-defaults" rows="4" readonly></textarea>
+              <div class="row"><button class="btn" id="yt-defaults-copy" type="button">Copy description</button></div>
+              <span class="lbl">Tags</span><textarea id="yt-tags" rows="2" readonly></textarea>
+              <div class="row"><button class="btn" id="yt-tags-copy" type="button">Copy tags</button></div></details></li>
+          <li><b>Done.</b> Clip Engine checks your channel every 3 minutes, finds each new Short, fills in its link and starts the Whop countdown.
+            <div class="row" style="margin-top:6px"><label class="lbl" for="yt-channel">Your channel</label><input type="text" id="yt-channel" class="mono" placeholder="@tjrclipsdaily" style="flex:1;min-width:0;max-width:340px"><button class="btn" id="yt-match" type="button">Check now</button></div></li>
+        </ol>
+      </div>
       <div class="row" style="justify-content:space-between">
         <div class="filters" id="filters">
           <button class="chip" data-f="all" aria-pressed="true">All</button>
@@ -332,6 +348,7 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   ['make', 'clips', 'accounts', 'rules', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== b.dataset.tab);
   if (b.dataset.tab === 'settings') { loadOllama(); loadYT(); }
   if (b.dataset.tab === 'accounts') loadAccounts();
+  if (b.dataset.tab === 'clips') loadWatch();
 });
 
 /* campaign */
@@ -356,7 +373,7 @@ function setCampaign(id){
   if (!campaign.sources.length) cs.append(el('li', null, 'None listed'));
   $('#cur-brief').textContent = campaign.brief || ''; $('#cur-brief-box').hidden = !campaign.brief;
 }
-$('#campaign').onchange = e => { setCampaign(e.target.value); api('/api/settings', { campaign: campaign.id }); if (!$('#tab-accounts').hidden) loadAccounts(); };
+$('#campaign').onchange = e => { setCampaign(e.target.value); api('/api/settings', { campaign: campaign.id }); if (!$('#tab-accounts').hidden) loadAccounts(); loadWatch(); renderClips(true); };
 
 async function browse(url, btn){
   btn.disabled = true; btn.textContent = 'Loading…';
@@ -441,12 +458,12 @@ function renderJobs(){
 }
 
 /* clips */
-function deadline(p){ const mins = (campaign && campaign.submit_within_min) || 0; return mins ? p.at + mins * 60 : null; }
+function deadline(p, c){ const cp = (c && S.campaigns.find(x => x.id === c.campaign)) || campaign; const mins = (cp && cp.submit_within_min) || 0; return mins ? p.at + mins * 60 : null; }
 function renderDue(){
   const box = $('#due'); box.innerHTML = '';
   const now = Date.now() / 1000 - skew;
   const due = [];
-  S.clips.forEach(c => (c.posts || []).forEach(p => { const d = deadline(p); if (d && !p.submitted) due.push({ c, p, d }); }));
+  S.clips.forEach(c => (c.posts || []).forEach(p => { const d = deadline(p, c); if (d && !p.submitted) due.push({ c, p, d }); }));
   if (!due.length) return;
   const b = el('div', 'due'); b.append(el('strong', null, 'Submit these links in Whop Content Rewards'));
   due.sort((x, y) => x.d - y.d).forEach(({ c, p, d }) => {
@@ -459,13 +476,14 @@ function renderDue(){
   box.append(b);
 }
 function renderClips(force){
-  const list = S.clips.filter(c => filter === 'all' || c.status === filter);
-  $('#n-clips').textContent = S.clips.length ? String(S.clips.length) : '';
-  const sig = JSON.stringify([filter, list.map(c => [c.id, c.file, c.status, (c.posts || []).length, (c.posts || []).filter(p => p.submitted).length, JSON.stringify(c.yt_upload || {})]), !!(YTS && YTS.connected)]);
+  const mine = S.clips.filter(c => campaign && c.campaign === campaign.id);
+  const list = mine.filter(c => filter === 'all' || c.status === filter);
+  $('#n-clips').textContent = mine.length ? String(mine.length) : '';
+  const sig = JSON.stringify([filter, campaign && campaign.id, list.map(c => [c.id, c.file, c.status, (c.posts || []).length, (c.posts || []).filter(p => p.submitted).length, JSON.stringify(c.yt_upload || {}), !!c.yt_batch]), !!(YTS && YTS.connected)]);
   renderDue();
   if (sig === clipSig && !force) return; clipSig = sig;
   const box = $('#clips'); box.innerHTML = '';
-  if (!list.length){ box.append(el('p', 'empty', S.clips.length ? 'No clips in this filter.' : 'Finished clips appear here, each with a ready caption, why it was picked, and buttons to track posting and submitting.')); return; }
+  if (!list.length){ box.append(el('p', 'empty', mine.length ? 'No clips in this filter.' : 'Finished clips appear here, each with a ready caption, why it was picked, and buttons to track posting and submitting.')); return; }
   list.forEach(c => box.append(clipCard(c)));
 }
 function clipCard(c){
@@ -475,6 +493,7 @@ function clipCard(c){
   const tags = el('div', 'tags');
   tags.append(el('span', 'tag st-' + c.status, { ready: 'Ready to post', posted: 'Posted', submitted: 'Submitted' }[c.status] || c.status));
   tags.append(el('span', 'tag', fmt(c.end - c.start) + ' long'), el('span', 'tag', 'from ' + fmt(c.start)), el('span', 'tag', c.layout === 'face' ? 'follows face' : c.layout === 'split' ? 'facecam + screen' : c.layout === 'native' ? 'vertical source' : 'full frame'));
+  if (c.yt_batch && c.status === 'ready') tags.append(el('span', 'tag st-posted', 'In YouTube batch'));
   (c.reasons || []).forEach(r => tags.append(el('span', 'tag', r)));
   m.append(tags);
   m.append(el('div', 'src-t', c.source_title));
@@ -506,7 +525,7 @@ function clipCard(c){
 
   const posts = el('div', 'posts');
   (c.posts || []).forEach(p => {
-    const d = deadline(p), now = Date.now() / 1000 - skew;
+    const d = deadline(p, c), now = Date.now() / 1000 - skew;
     const r = el('div', 'p'); r.append(el('strong', null, p.platform));
     const a = el('a', null, p.url); a.href = p.url; a.target = '_blank'; a.rel = 'noopener'; r.append(a);
     if (p.submitted) r.append(el('span', 'okk', 'Submitted'));
@@ -695,6 +714,44 @@ $('#yt-file').onchange = async e => {
 $('#yt-connect').onclick = () => api('/api/youtube/connect', {}).then(() => { toast('Sign in on the Google tab that opened'); setTimeout(loadYT, 1500); }).catch(e => toast(e.message));
 $('#yt-disconnect').onclick = () => api('/api/youtube/disconnect', {}).then(loadYT);
 $('#s-ytpriv').onchange = () => api('/api/settings', { settings: { youtube_privacy: $('#s-ytpriv').value } }).then(() => toast('Saved'));
+
+
+/* youtube studio batch + watcher */
+async function loadWatch(){
+  if (!campaign) return;
+  try {
+    const w = await api('/api/ytwatch?campaign=' + encodeURIComponent(campaign.id));
+    if (document.activeElement !== $('#yt-channel')) $('#yt-channel').value = w.channel || '';
+    const bits = [];
+    if (w.waiting) bits.push(w.waiting + ' waiting to appear on your channel');
+    if (w.last && w.last.checked) bits.push('last checked ' + clock(w.last.checked));
+    $('#yt-watch-state').textContent = bits.join(' · ');
+  } catch (e) {}
+}
+$('#yt-batch').onclick = async () => {
+  const b = $('#yt-batch'); b.disabled = true;
+  try {
+    const r = await api('/api/ytbatch', { campaign: campaign.id });
+    $('#yt-batch-msg').textContent = r.count + ' clip' + (r.count > 1 ? 's' : '') + ' ready in the folder that just opened.';
+    $('#yt-defaults').value = r.defaults; $('#yt-tags').value = r.tags; $('#yt-defaults-box').open = true;
+    loadWatch(); poll(true);
+  } catch (e) { $('#yt-batch-msg').textContent = e.message; }
+  b.disabled = false;
+};
+$('#yt-defaults-copy').onclick = () => copy($('#yt-defaults').value);
+$('#yt-tags-copy').onclick = () => copy($('#yt-tags').value);
+$('#yt-match').onclick = async () => {
+  const b = $('#yt-match'); b.disabled = true; b.textContent = 'Checking…';
+  try { const r = await api('/api/ytmatch', { campaign: campaign.id, channel: $('#yt-channel').value });
+        toast(r.found ? 'Found ' + r.found + ' new Short' + (r.found > 1 ? 's' : '') + '. Submit the links now.' : 'No new matching Shorts yet (checked ' + r.checked + ').'); poll(true); loadWatch(); }
+  catch (e) { toast(e.message); }
+  b.disabled = false; b.textContent = 'Check now';
+};
+$('#add-camp').onclick = () => {
+  document.querySelector('.tabs [data-tab=rules]').click();
+  $('#cb-file').click();
+};
+setInterval(() => { if (!$('#tab-clips').hidden) loadWatch(); }, 15000);
 
 /* poll */
 let first = true;

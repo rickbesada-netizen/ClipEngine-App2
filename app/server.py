@@ -188,6 +188,159 @@ def worker():
             save_db()
 
 
+# ---------------------------------------------------------------- YouTube Studio batch + post watcher
+def yt_title(c: dict, camp: dict) -> str:
+    tags = " ".join(t if t.startswith("#") else "#" + t for t in camp.get("hashtags", []))
+    base = (c.get("hook") or c.get("source_title") or "Clip").strip().rstrip(".")
+    title = f"{base} {tags}".strip()
+    return title[:95]
+
+
+def safe_filename(title: str) -> str:
+    t = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", title).strip().rstrip(". ")
+    return (t or "clip")[:120]
+
+
+def _norm(t: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", re.sub(r"#\w+", " ", (t or "").lower())).strip()
+
+
+def _channel_for(camp_id: str) -> str:
+    acc = DB.setdefault("accounts", {}).get(camp_id, {})
+    ch = (acc.get("yt_channel") or "").strip()
+    if not ch and acc.get("handle"):
+        ch = "@" + acc["handle"]
+    if not ch:
+        return ""
+    if ch.startswith("http"):
+        return ch.split("?")[0].rstrip("/")
+    return "https://www.youtube.com/" + (ch if ch.startswith("@") else "@" + ch)
+
+
+def open_path(target: Path):
+    if os.name == "nt":
+        if target.is_file():
+            subprocess.Popen(["explorer", "/select,", str(target)])
+        else:
+            os.startfile(str(target))  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(target)])
+    else:
+        subprocess.Popen(["xdg-open", str(target if target.is_dir() else target.parent)])
+
+
+@APP.post("/api/ytbatch")
+def yt_batch():
+    import shutil
+    body = request.get_json(force=True) or {}
+    camp = campaign_by_id(body.get("campaign"))
+    want = set(body.get("ids") or [])
+    with LOCK:
+        pool = [c for c in DB["clips"] if c["campaign"] == camp["id"] and (P.CLIP_DIR / c["file"]).exists()
+                and not any(p.get("platform") == "YouTube Shorts" for p in c.get("posts", []))
+                and (c["id"] in want if want else not c.get("yt_batch"))]
+    pool = sorted(pool, key=lambda c: c.get("created", 0))[:15]
+    if not pool:
+        return jsonify(error="No new clips to batch for this campaign. Make more clips, or every clip is already in a batch."), 400
+    folder = P.DATA / "YouTube uploads" / f"{camp['name']} {time.strftime('%Y-%m-%d %H%M')}"
+    folder.mkdir(parents=True, exist_ok=True)
+    used = set()
+    for c in pool:
+        title = yt_title(c, camp)
+        name = safe_filename(title)
+        n, k = name, 2
+        while n.lower() in used:
+            n = f"{name} {k}"; k += 1
+        used.add(n.lower())
+        shutil.copy2(P.CLIP_DIR / c["file"], folder / f"{n}.mp4")
+        with LOCK:
+            c["yt_batch"] = str(folder); c["yt_title"] = title
+    save_db()
+    try:
+        open_path(folder)
+    except Exception:  # noqa: BLE001
+        pass
+    tags = " ".join(dict.fromkeys([*camp.get("hashtags", []), *camp.get("extra_tags", [])]))
+    defaults = (f"Daily clips of {camp['name']}: {(camp.get('niche') or 'best moments').lower()}.\n"
+                f"Fan clip channel, not affiliated with {camp['name']}.\n\n{tags}").strip()
+    return jsonify(ok=True, count=len(pool), folder=str(folder), defaults=defaults,
+                   tags=", ".join(t.lstrip("#") for t in [*camp.get("hashtags", []), *camp.get("extra_tags", [])]))
+
+
+def match_posts(camp_id: str) -> dict:
+    """Finds this campaign's clips on your public channel and fills in their post links."""
+    url = _channel_for(camp_id)
+    if not url:
+        return {"error": "Add your YouTube channel (handle or link) first."}
+    try:
+        items = P.list_source(url + "/shorts", 40, DB["settings"])
+    except Exception as e:  # noqa: BLE001
+        return {"error": friendly_error(e)}
+    found = 0
+    with LOCK:
+        waiting = [c for c in DB["clips"] if c["campaign"] == camp_id
+                   and not any(p.get("platform") == "YouTube Shorts" for p in c.get("posts", []))]
+        taken = {p.get("url") for c in DB["clips"] for p in c.get("posts", [])}
+        for it in items:
+            if not it.get("id"):
+                continue
+            link = f"https://www.youtube.com/shorts/{it['id']}"
+            if link in taken:
+                continue
+            t = _norm(it.get("title"))
+            if not t:
+                continue
+            for c in waiting:
+                h = _norm(c.get("yt_title") or c.get("hook"))
+                if h and (h == t or (len(h) > 12 and (h in t or t in h))):
+                    c["posts"].append({"platform": "YouTube Shorts", "url": link, "at": time.time(), "auto": True})
+                    c["status"] = "posted"
+                    waiting.remove(c); taken.add(link); found += 1
+                    break
+    if found:
+        save_db()
+    with LOCK:
+        DB.setdefault("watch", {})[camp_id] = {"checked": time.time(), "found": found, "channel": url}
+    return {"found": found, "checked": len(items), "channel": url}
+
+
+@APP.post("/api/ytmatch")
+def yt_match():
+    body = request.get_json(force=True) or {}
+    cid = body.get("campaign") or DB.get("campaign")
+    if body.get("channel") is not None:
+        with LOCK:
+            DB.setdefault("accounts", {}).setdefault(cid, {})["yt_channel"] = body["channel"].strip()
+        save_db()
+    r = match_posts(cid)
+    return (jsonify(error=r["error"]), 400) if r.get("error") else jsonify(r)
+
+
+@APP.get("/api/ytwatch")
+def yt_watch_state():
+    cid = request.args.get("campaign") or DB.get("campaign")
+    acc = DB.setdefault("accounts", {}).get(cid, {})
+    w = DB.get("watch", {}).get(cid, {})
+    waiting = sum(1 for c in DB["clips"] if c["campaign"] == cid and c.get("yt_batch")
+                  and not any(p.get("platform") == "YouTube Shorts" for p in c.get("posts", [])))
+    return jsonify(channel=acc.get("yt_channel") or ("@" + acc["handle"] if acc.get("handle") else ""),
+                   resolved=_channel_for(cid), last=w, waiting=waiting)
+
+
+def watcher():
+    """Every 3 minutes, look for newly posted Shorts for clips that are waiting in an upload batch."""
+    while True:
+        time.sleep(180)
+        try:
+            camps = {c["campaign"] for c in DB["clips"] if c.get("yt_batch")
+                     and not any(p.get("platform") == "YouTube Shorts" for p in c.get("posts", []))}
+            for cid in camps:
+                if _channel_for(cid):
+                    match_posts(cid)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+
+
 def friendly_error(e: Exception) -> str:
     s = str(e)
     low = s.lower()
@@ -526,8 +679,8 @@ def yt_upload(cid):
     privacy = body.get("privacy") or DB["settings"].get("youtube_privacy", "public")
     camp = campaign_by_id(c["campaign"])
     tags = list(dict.fromkeys([*camp.get("hashtags", []), *camp.get("extra_tags", [])]))
-    req_tags = " ".join(t if t.startswith("#") else "#" + t for t in camp.get("hashtags", []))
-    title = f"{c.get('hook') or c['source_title']} {req_tags} #Shorts".strip()
+    title = yt_title(c, camp)
+    c["yt_title"] = title
     c["yt_upload"] = {"state": "uploading", "progress": 0}
 
     def run():
@@ -714,6 +867,7 @@ if __name__ == "__main__":
     if "--selftest" in sys.argv:
         sys.exit(selftest())
     threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=watcher, daemon=True).start()
     url = f"http://127.0.0.1:{PORT}"
     print(f"\n  Clip Engine is running at {url}\n  Keep this window open while you use it.\n")
     if not os.environ.get("CLIP_ENGINE_NO_BROWSER"):

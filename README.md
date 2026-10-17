@@ -8,7 +8,8 @@ Free app that runs on your Windows PC and turns streams and long videos into ver
 - Writes each caption with the campaign's required hashtags
 - Add any campaign by uploading its brief (PDF, Word, Google Doc link, screenshot or pasted text): it reads the rules, sources, hashtags, pay and deadline
 - Channel kit per campaign: name and handle ideas (checks which YouTube handles are free), profile pictures, a YouTube banner, and a description and bios sized for YouTube, TikTok and Instagram
-- Uploads clips straight to your YouTube channel (official YouTube API, one-time setup in Settings)
+- YouTube upload batches: files named with their finished titles for one bulk upload in Studio; the app then watches your channel and fills in each Short's link and submission countdown automatically
+- Optional direct upload through the official YouTube API (needs YouTube's free audit before videos can be public)
 - Tracks posted links and counts down the submission deadline
 
 ## Download (Windows)
