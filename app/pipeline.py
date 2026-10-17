@@ -7,14 +7,21 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import wave
 from pathlib import Path
 
 import numpy as np
 
-APP_DIR = Path(__file__).resolve().parent
-ROOT = APP_DIR.parent
-DATA = ROOT / "data"
+if getattr(sys, "frozen", False):
+    # Packaged ClipEngine.exe: bundled files live in the unpack folder, user data sits next to the exe.
+    APP_DIR = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    ROOT = Path(sys.executable).resolve().parent
+    os.environ["PATH"] = str(APP_DIR) + os.pathsep + os.environ.get("PATH", "")  # bundled deno for yt-dlp
+else:
+    APP_DIR = Path(__file__).resolve().parent
+    ROOT = APP_DIR.parent
+DATA = ROOT / "ClipEngine data" if getattr(sys, "frozen", False) else ROOT / "data"
 DL_DIR = DATA / "downloads"
 CLIP_DIR = DATA / "clips"
 WORK_DIR = DATA / "work"

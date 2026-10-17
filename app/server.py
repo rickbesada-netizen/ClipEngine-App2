@@ -18,9 +18,14 @@ from flask import Flask, jsonify, request, send_from_directory
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pipeline as P  # noqa: E402
 
-APP = Flask(__name__, static_folder="static", static_url_path="/static")
+APP = Flask(__name__, static_folder=str(P.APP_DIR / "static"), static_url_path="/static")
 DB_PATH = P.DATA / "db.json"
 CAMPAIGNS_PATH = P.APP_DIR / "campaigns.json"
+if getattr(sys, "frozen", False):
+    # In the exe, keep an editable copy of the campaign presets beside the data folder.
+    CAMPAIGNS_PATH = P.DATA / "campaigns.json"
+    if not CAMPAIGNS_PATH.exists():
+        CAMPAIGNS_PATH.write_text((P.APP_DIR / "campaigns.json").read_text(encoding="utf-8"), encoding="utf-8")
 LOCK = threading.RLock()
 PORT = int(os.environ.get("CLIP_ENGINE_PORT", "5050"))
 
@@ -406,7 +411,38 @@ def cleanup():
     return jsonify(ok=True, freed_mb=round(freed / 1e6))
 
 
+def selftest() -> int:
+    """Checks every heavy dependency loads. Used by the Windows build to test the exe."""
+    import cv2
+    import faster_whisper  # noqa: F401
+    import yt_dlp  # noqa: F401
+    ok = True
+    checks = {
+        "ffmpeg": Path(P.FFMPEG).exists() or bool(P.shutil.which(P.FFMPEG)),
+        "ffmpeg captions (ass filter)": P.CAN_CAPTION,
+        "face detection": hasattr(cv2, "CascadeClassifier") and not cv2.CascadeClassifier(
+            os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")).empty(),
+        "screen files": (P.APP_DIR / "static" / "index.html").exists(),
+        "caption font": (P.FONT_DIR / "Poppins-Bold.ttf").exists(),
+        "campaigns": bool(campaigns()),
+    }
+    try:
+        from faster_whisper.utils import get_assets_path
+        import onnxruntime  # noqa: F401  (voice detection)
+        checks["transcription files"] = any(Path(get_assets_path()).glob("*.onnx"))
+    except Exception as e:  # noqa: BLE001
+        print("transcription import error:", e)
+        checks["transcription files"] = False
+    for k, v in checks.items():
+        print(f"{'OK  ' if v else 'FAIL'} {k}")
+        ok = ok and bool(v)
+    print("SELFTEST", "PASSED" if ok else "FAILED")
+    return 0 if ok else 1
+
+
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        sys.exit(selftest())
     threading.Thread(target=worker, daemon=True).start()
     url = f"http://127.0.0.1:{PORT}"
     print(f"\n  Clip Engine is running at {url}\n  Keep this window open while you use it.\n")

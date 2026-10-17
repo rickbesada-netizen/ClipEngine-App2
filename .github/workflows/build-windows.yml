@@ -1,0 +1,78 @@
+name: Build ClipEngine.exe
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 20 * * 0" # weekly (Monday 7am Sydney) so the YouTube downloader stays current
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Get deno (yt-dlp needs it for YouTube)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip -OutFile deno.zip
+          Expand-Archive deno.zip -DestinationPath denobin
+          denobin\deno.exe --version
+
+      - name: Build ClipEngine.exe
+        run: >
+          pyinstaller --noconfirm --clean --onefile --console --name ClipEngine
+          --paths app --hidden-import pipeline
+          --add-data "app/static;static" --add-data "app/fonts;fonts" --add-data "app/campaigns.json;."
+          --add-binary "denobin/deno.exe;."
+          --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime --collect-all tokenizers
+          --collect-all av --collect-all imageio_ffmpeg --collect-all yt_dlp --collect-all yt_dlp_ejs
+          --collect-data cv2 --collect-submodules flask
+          app/server.py
+
+      - name: Test the exe
+        shell: pwsh
+        run: |
+          dist\ClipEngine.exe --selftest
+          if ($LASTEXITCODE -ne 0) { throw "Self-test failed" }
+          $env:CLIP_ENGINE_NO_BROWSER = "1"
+          $p = Start-Process dist\ClipEngine.exe -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Seconds 2
+            try { $r = Invoke-WebRequest http://127.0.0.1:5050/api/state -UseBasicParsing; if ($r.StatusCode -eq 200) { $ok = $true; break } } catch {}
+          }
+          Stop-Process -Id $p.Id -Force
+          if (-not $ok) { throw "App did not start" }
+          Write-Host "App started and answered."
+
+      - name: Publish download
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Clip Engine for Windows (build ${{ github.run_number }})
+          make_latest: true
+          files: dist/ClipEngine.exe
+          body: |
+            **Download ClipEngine.exe below** and double-click it. Your browser opens Clip Engine.
+
+            - Windows may say "Windows protected your PC" because the app isn't code-signed. Click **More info** then **Run anyway**.
+            - Put the exe in its own folder (for example Documents\Clip Engine). Your clips are saved in a "ClipEngine data" folder next to it.
+            - The first transcription downloads a speech model (about 150 MB, once).
+            - Starting takes 10–20 seconds while it unpacks. Keep the black window open while you work.
+
+            Built automatically from the latest code. A fresh build is made every week so the video downloader keeps working.

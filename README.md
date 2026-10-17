@@ -8,10 +8,17 @@ Free app that runs on your Windows PC and turns streams and long videos into ver
 - Writes each caption with the campaign's required hashtags
 - Tracks posted links and counts down the submission deadline
 
-## Run it
-1. Download the code (green **Code** button > **Download ZIP**) and unzip it somewhere permanent.
-2. Double-click `START.bat`. The first run installs Python if needed (then run START.bat again) and everything else.
-3. Your browser opens at http://127.0.0.1:5050. Keep the black window open while you work.
+## Download (Windows)
+**[Download ClipEngine.exe](https://github.com/besadapat-debug/clip-engine/releases/latest/download/ClipEngine.exe)**, put it in its own folder (for example Documents\Clip Engine) and double-click it. Your browser opens Clip Engine.
+
+- Windows may say "Windows protected your PC" because the app isn't code-signed: click **More info**, then **Run anyway**.
+- Clips are saved in a `ClipEngine data` folder next to the exe.
+- Starting takes 10-20 seconds. Keep the black window open while you work.
+
+The exe is built and tested automatically by GitHub (see the Actions tab) whenever the code changes, and rebuilt weekly so the video downloader stays current.
+
+## Run from source instead
+Download the code (green **Code** button > **Download ZIP**), unzip it and double-click `START.bat`.
 
 See `README.txt` for the full guide. Campaign presets live in `app/campaigns.json` (TJR included).
 
