@@ -17,6 +17,7 @@ from flask import Flask, jsonify, request, send_from_directory
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pipeline as P  # noqa: E402
+import youtube as YT  # noqa: E402
 
 APP = Flask(__name__, static_folder=str(P.APP_DIR / "static"), static_url_path="/static")
 DB_PATH = P.DATA / "db.json"
@@ -32,7 +33,7 @@ PORT = int(os.environ.get("CLIP_ENGINE_PORT", "5050"))
 DEFAULT_SETTINGS = {
     "clips_per_video": 4, "min_len": 20, "max_len": 45, "layout": "auto", "captions": True,
     "hook_overlay": True, "whisper_model": "base", "max_height": 1080, "cookies_browser": "none",
-    "cookies_file": "", "use_ollama": False, "ollama_model": "", "caption_style": {"upper": True, "size": 96},
+    "cookies_file": "", "use_ollama": False, "youtube_privacy": "public", "ollama_model": "", "caption_style": {"upper": True, "size": 96},
 }
 
 
@@ -411,6 +412,141 @@ def cleanup():
     return jsonify(ok=True, freed_mb=round(freed / 1e6))
 
 
+# ---------------------------------------------------------------- account setup helpers
+def _campaign_names(camp: dict) -> dict:
+    name = camp.get("name") or "Creator"
+    base = camp.get("handle_base") or re.sub(r"[^a-z0-9]", "", name.lower()) or "clips"
+    niche = camp.get("niche") or "Best moments, quotes and funny clips"
+    handles = [f"{base}clipsdaily", f"{base}clips", f"{base}.clips", f"{base}moments", f"daily{base}clips",
+               f"{base}highlights", f"{base}daily", f"best.of.{base}", f"{base}reels", f"{base}_vault"]
+    displays = [f"{name} Clips Daily", f"{name} Clips", f"{name} Moments", f"Best of {name}", f"{name} Highlights", f"Daily {name}"]
+    bio = f"Daily clips of {name}. {niche}. Fan page, not affiliated."
+    yt_desc = (f"The best moments from {name}, clipped daily. {niche}.\n\n"
+               f"This is a fan clip channel and isn't run by {name}. New Shorts every day.")
+    return {"handles": handles, "displays": displays, "bio": bio, "youtube_description": yt_desc}
+
+
+def _http_status(url: str) -> tuple[int, str]:
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(url, headers={"user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128 Safari/537.36",
+                                               "accept-language": "en-US,en;q=0.9", "cookie": "CONSENT=YES+cb; SOCS=CAI"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, r.read(400000).decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, ""
+    except Exception:  # noqa: BLE001
+        return 0, ""
+
+
+def _check_handle(h: str) -> dict:
+    out = {}
+    code, _ = _http_status(f"https://www.youtube.com/@{h}")
+    out["youtube"] = "free" if code == 404 else "taken" if code == 200 else "unknown"
+    code, html = _http_status(f"https://www.tiktok.com/@{h}")
+    if code == 404 or "Couldn't find this account" in html or '"statusCode":10221' in html or '"statusCode":10202' in html:
+        out["tiktok"] = "free"
+    elif code == 200 and f'"uniqueId":"{h}"' in html:
+        out["tiktok"] = "taken"
+    else:
+        out["tiktok"] = "unknown"
+    out["instagram"] = "unknown"
+    return out
+
+
+@APP.get("/api/accounts")
+def accounts():
+    camp = campaign_by_id(request.args.get("campaign") or (DB.get("campaign") or campaigns()[0]["id"]))
+    acc = DB.setdefault("accounts", {}).get(camp["id"], {})
+    return jsonify({**_campaign_names(camp), "saved": acc})
+
+
+@APP.post("/api/accounts/check")
+def accounts_check():
+    from concurrent.futures import ThreadPoolExecutor
+    hs = [re.sub(r"[^a-z0-9._]", "", h.lower())[:30] for h in (request.get_json(force=True).get("handles") or [])][:12]
+    with ThreadPoolExecutor(6) as ex:
+        res = dict(zip(hs, ex.map(_check_handle, hs)))
+    return jsonify(res)
+
+
+@APP.post("/api/accounts/save")
+def accounts_save():
+    body = request.get_json(force=True)
+    with LOCK:
+        DB.setdefault("accounts", {})[body["campaign"]] = body.get("data", {})
+    save_db()
+    return jsonify(ok=True)
+
+
+# ---------------------------------------------------------------- YouTube upload
+@APP.get("/api/youtube")
+def yt_status():
+    try:
+        return jsonify(YT.status())
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"has_secret": YT.SECRET.exists(), "connected": False, "error": str(e)[:200]})
+
+
+@APP.post("/api/youtube/secret")
+def yt_secret():
+    try:
+        YT.save_secret(request.get_json(force=True).get("text", ""))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(ok=True)
+
+
+@APP.post("/api/youtube/connect")
+def yt_connect():
+    try:
+        YT.connect_async()
+    except Exception as e:  # noqa: BLE001
+        return jsonify(error=str(e)), 400
+    return jsonify(ok=True)
+
+
+@APP.post("/api/youtube/disconnect")
+def yt_disconnect():
+    YT.disconnect()
+    return jsonify(ok=True)
+
+
+@APP.post("/api/clips/<cid>/youtube")
+def yt_upload(cid):
+    c = clip_by_id(cid)
+    if not c:
+        return jsonify(error="Not found"), 404
+    if (c.get("yt_upload") or {}).get("state") == "uploading":
+        return jsonify(error="Already uploading"), 400
+    body = request.get_json(force=True) or {}
+    privacy = body.get("privacy") or DB["settings"].get("youtube_privacy", "public")
+    camp = campaign_by_id(c["campaign"])
+    tags = list(dict.fromkeys([*camp.get("hashtags", []), *camp.get("extra_tags", [])]))
+    req_tags = " ".join(t if t.startswith("#") else "#" + t for t in camp.get("hashtags", []))
+    title = f"{c.get('hook') or c['source_title']} {req_tags} #Shorts".strip()
+    c["yt_upload"] = {"state": "uploading", "progress": 0}
+
+    def run():
+        try:
+            r = YT.upload(P.CLIP_DIR / c["file"], title, c.get("caption", ""), tags, privacy,
+                          lambda f: c["yt_upload"].update(progress=round(f, 3)))
+            with LOCK:
+                c["yt_upload"] = {"state": "done", "progress": 1, **r}
+                if r["privacy"] == "public" or privacy != "public":
+                    c["posts"].append({"platform": "YouTube Shorts", "url": r["url"], "at": time.time(), "auto": True})
+                    if r["privacy"] == "public":
+                        c["status"] = "posted"
+        except Exception as e:  # noqa: BLE001
+            c["yt_upload"] = {"state": "error", "error": str(e)[:300]}
+        save_db()
+
+    threading.Thread(target=run, daemon=True).start()
+    save_db()
+    return jsonify(ok=True)
+
+
 def selftest() -> int:
     """Checks every heavy dependency loads. Used by the Windows build to test the exe."""
     import cv2
@@ -426,6 +562,13 @@ def selftest() -> int:
         "caption font": (P.FONT_DIR / "Poppins-Bold.ttf").exists(),
         "campaigns": bool(campaigns()),
     }
+    try:
+        import google_auth_oauthlib.flow  # noqa: F401
+        import googleapiclient.discovery  # noqa: F401
+        checks["youtube upload"] = True
+    except Exception as e:  # noqa: BLE001
+        print("youtube import error:", e)
+        checks["youtube upload"] = False
     try:
         from faster_whisper.utils import get_assets_path
         import onnxruntime  # noqa: F401  (voice detection)

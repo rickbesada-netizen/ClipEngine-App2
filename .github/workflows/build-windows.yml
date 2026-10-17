@@ -41,7 +41,7 @@ jobs:
           --add-binary "denobin/deno.exe;."
           --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime --collect-all tokenizers
           --collect-all av --collect-all imageio_ffmpeg --collect-all yt_dlp --collect-all yt_dlp_ejs
-          --collect-data cv2 --collect-submodules flask
+          --collect-data cv2 --collect-submodules flask --collect-data googleapiclient --hidden-import youtube
           app/server.py
 
       - name: Test the exe

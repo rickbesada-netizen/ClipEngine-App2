@@ -6,6 +6,8 @@ Free app that runs on your Windows PC and turns streams and long videos into ver
 - Transcribes locally (faster-whisper), finds the moments people rewatch (YouTube "most replayed", loudness, laughter, strong lines, campaign keywords)
 - Cuts 1080x1920 clips that follow the speaker's face or stack facecam over screen, with word-by-word captions and a hook title
 - Writes each caption with the campaign's required hashtags
+- Suggests account names, handles and bios for each campaign and checks which YouTube handles are free
+- Uploads clips straight to your YouTube channel (official YouTube API, one-time setup in Settings)
 - Tracks posted links and counts down the submission deadline
 
 ## Download (Windows)

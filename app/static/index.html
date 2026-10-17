@@ -93,6 +93,21 @@ details summary{cursor:pointer;color:var(--signal);font-weight:600;font-size:13p
 .notice{border-left:3px solid var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent);padding:8px 12px;margin:0;font-size:13px}
 .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:var(--surface);padding:9px 14px;border-radius:5px;font-size:13px;z-index:20;max-width:calc(100% - 32px)}
 .mono{font-family:var(--mono);font-size:12px}
+.opts{display:flex;flex-wrap:wrap;gap:6px}
+.hl{display:flex;flex-direction:column;gap:6px}
+.hl-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;border:1px solid var(--line);border-radius:4px;padding:6px 10px}
+.hl-row label{display:flex;gap:8px;align-items:center;font-family:var(--mono);font-size:13px;cursor:pointer;min-width:0}
+.st{display:flex;gap:5px;flex-wrap:wrap}
+.st a{font-size:11.5px;border-radius:3px;padding:1px 7px;border:1px solid var(--line);color:var(--muted);text-decoration:none}
+.st a.free{border-color:var(--ok);color:var(--ok)} .st a.taken{border-color:var(--bad);color:var(--bad);text-decoration:line-through}
+.cl{display:flex;flex-direction:column;gap:14px}
+.cl h3{margin:0;font-size:14px;text-transform:uppercase;letter-spacing:.06em}
+.cl label{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;cursor:pointer}
+.cl label input{margin-top:3px}
+.cl a{color:var(--signal)}
+.steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px;font-size:13.5px}
+.steps a{color:var(--signal)}
+.ok-line{color:var(--ok);font-weight:600;margin:0} .bad-line{color:var(--bad);margin:0;font-size:13px}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
 </style>
 </head>
@@ -106,6 +121,7 @@ details summary{cursor:pointer;color:var(--signal);font-weight:600;font-size:13p
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="make" aria-selected="true">Find clips</button>
     <button role="tab" data-tab="clips" aria-selected="false">Clips<span class="n" id="n-clips"></span></button>
+    <button role="tab" data-tab="accounts" aria-selected="false">Accounts</button>
     <button role="tab" data-tab="rules" aria-selected="false">Campaign rules</button>
     <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
   </nav>
@@ -156,6 +172,31 @@ details summary{cursor:pointer;color:var(--signal);font-weight:600;font-size:13p
     </div>
   </section>
 
+  <section id="tab-accounts" hidden>
+    <div class="grid">
+      <div class="panel">
+        <h2>Names for this campaign</h2>
+        <p class="hint">Use the same name, handle and bio on YouTube, TikTok and Instagram. Pick one of each and it's saved for this campaign.</p>
+        <span class="lbl">Display name</span>
+        <div class="opts" id="acc-displays"></div>
+        <div class="row" style="justify-content:space-between"><span class="lbl">Handle (username)</span><button class="btn" id="acc-check" type="button">Check which are free</button></div>
+        <div class="hl" id="acc-handles"></div>
+        <p class="hint">YouTube is checked exactly. TikTok is a best guess. Instagram can't be checked, so tap IG to look. Taken names are crossed out.</p>
+        <span class="lbl">Bio (all three apps)</span>
+        <textarea id="acc-bio" rows="3"></textarea>
+        <div class="row"><button class="btn" id="acc-bio-copy" type="button">Copy bio</button></div>
+        <span class="lbl">YouTube channel description</span>
+        <textarea id="acc-ytdesc" rows="4"></textarea>
+        <div class="row"><button class="btn" id="acc-yt-copy" type="button">Copy description</button></div>
+        <p class="hint">Profile picture: the campaign's thumbnail or official creator artwork (ask in the campaign Discord). Keep "fan page, not affiliated" in the bio so the platforms don't treat the account as impersonation.</p>
+      </div>
+      <div class="panel">
+        <h2>Set up each app</h2>
+        <div class="cl" id="acc-checklist"></div>
+      </div>
+    </div>
+  </section>
+
   <section id="tab-rules" hidden>
     <div class="grid">
       <div class="panel"><h2>Rules</h2><ul class="rules" id="rules"></ul></div>
@@ -194,6 +235,23 @@ details summary{cursor:pointer;color:var(--signal);font-weight:600;font-size:13p
         <h2 style="margin-top:8px">Disk space</h2>
         <div class="row"><button class="btn" id="cleanup" type="button">Delete downloaded source videos</button><span class="hint">Finished clips are kept.</span></div>
       </div>
+      <div class="panel" style="grid-column:1/-1">
+        <h2>Upload to YouTube from Clip Engine</h2>
+        <div id="yt-state"></div>
+        <div class="row"><button class="go" id="yt-connect" type="button" style="font-size:17px">Connect YouTube channel</button><button class="btn" id="yt-disconnect" type="button" hidden>Disconnect</button>
+          <label class="lbl" for="s-ytpriv" style="margin-left:8px">Upload as</label><select id="s-ytpriv"><option value="public">Public</option><option value="unlisted">Unlisted</option><option value="private">Private</option></select></div>
+        <details id="yt-setup"><summary>One-time setup (about 10 minutes, free)</summary>
+          <ol class="steps" style="margin-top:10px">
+            <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud</a> signed in with the Google account that owns your clip channel, and create a project called <b>Clip Engine</b>.</li>
+            <li>Turn on the <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener">YouTube Data API v3</a> (press Enable).</li>
+            <li>Open <a href="https://console.cloud.google.com/auth/overview" target="_blank" rel="noopener">Google Auth Platform</a> and press Get started: app name <b>Clip Engine</b>, your email, Audience <b>External</b>. Then under Audience press <b>Publish app</b>, so you aren't signed out every 7 days.</li>
+            <li>Under <a href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noopener">Clients</a> press Create client, type <b>Desktop app</b>, then download the JSON file.</li>
+            <li>Choose that file here: <input type="file" id="yt-file" accept=".json,application/json"></li>
+            <li>Press <b>Connect YouTube channel</b>, sign in and pick your clip channel. Google warns the app isn't verified: press <b>Advanced</b>, then <b>Go to Clip Engine</b>. It's your own app.</li>
+          </ol>
+        </details>
+        <p class="notice">YouTube keeps videos uploaded this way <b>private</b> until your Google project passes YouTube's free review. Apply once with the <a href="https://support.google.com/youtube/contact/yt_api_form" target="_blank" rel="noopener">YouTube API audit form</a> (say it's a personal tool for uploading your own channel's Shorts). Until it's approved, upload in YouTube Studio instead. Clip Engine tells you if an upload came back private.</p>
+      </div>
     </div>
   </section>
 </main>
@@ -220,8 +278,9 @@ let skew = 0;
 /* tabs */
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-selected', x === b));
-  ['make', 'clips', 'rules', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== b.dataset.tab);
-  if (b.dataset.tab === 'settings') loadOllama();
+  ['make', 'clips', 'accounts', 'rules', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== b.dataset.tab);
+  if (b.dataset.tab === 'settings') { loadOllama(); loadYT(); }
+  if (b.dataset.tab === 'accounts') loadAccounts();
 });
 
 /* campaign */
@@ -242,7 +301,7 @@ function setCampaign(id){
   $('#platforms').textContent = campaign.platforms.join(', ');
   $('#reqtags').textContent = campaign.hashtags.join(' ') || 'None';
 }
-$('#campaign').onchange = e => { setCampaign(e.target.value); api('/api/settings', { campaign: campaign.id }); };
+$('#campaign').onchange = e => { setCampaign(e.target.value); api('/api/settings', { campaign: campaign.id }); if (!$('#tab-accounts').hidden) loadAccounts(); };
 
 async function browse(url, btn){
   btn.disabled = true; btn.textContent = 'Loading…';
@@ -347,7 +406,7 @@ function renderDue(){
 function renderClips(force){
   const list = S.clips.filter(c => filter === 'all' || c.status === filter);
   $('#n-clips').textContent = S.clips.length ? String(S.clips.length) : '';
-  const sig = JSON.stringify([filter, list.map(c => [c.id, c.file, c.status, (c.posts || []).length, (c.posts || []).filter(p => p.submitted).length])]);
+  const sig = JSON.stringify([filter, list.map(c => [c.id, c.file, c.status, (c.posts || []).length, (c.posts || []).filter(p => p.submitted).length, JSON.stringify(c.yt_upload || {})]), !!(YTS && YTS.connected)]);
   renderDue();
   if (sig === clipSig && !force) return; clipSig = sig;
   const box = $('#clips'); box.innerHTML = '';
@@ -376,6 +435,19 @@ function clipCard(c){
   const b3 = el('a', 'btn', 'Watch source'); b3.href = c.source_url + (c.source_url.includes('youtube.com/watch') ? '&t=' + Math.floor(c.start) + 's' : ''); b3.target = '_blank'; b3.rel = 'noopener'; acts.append(b3);
   const b4 = el('button', 'btn', 'Delete'); b4.type = 'button'; b4.onclick = () => { if (b4.dataset.sure){ api('/api/clips/' + c.id, null, 'DELETE').then(poll); } else { b4.dataset.sure = 1; b4.textContent = 'Click again to delete'; } }; acts.append(b4);
   m.append(acts);
+
+  const up = el('div', 'row');
+  const yu = c.yt_upload || {};
+  if (YTS && YTS.connected){
+    const yb = el('button', 'btn', yu.state === 'uploading' ? 'Uploading to YouTube ' + Math.round((yu.progress || 0) * 100) + '%' : 'Upload to YouTube'); yb.type = 'button';
+    yb.disabled = yu.state === 'uploading';
+    yb.onclick = () => api('/api/clips/' + c.id + '/youtube', {}).then(() => { toast('Uploading to YouTube'); poll(true); }).catch(e => toast(e.message));
+    up.append(yb);
+  }
+  [['YouTube Studio', 'https://studio.youtube.com'], ['TikTok upload', 'https://www.tiktok.com/upload'], ['Instagram', 'https://www.instagram.com']].forEach(([t, u]) => { const a = el('a', 'btn', t); a.href = u; a.target = '_blank'; a.rel = 'noopener'; up.append(a); });
+  m.append(up);
+  if (yu.state === 'error') m.append(el('p', 'bad-line', 'YouTube upload failed: ' + yu.error));
+  if (yu.state === 'done') m.append(el('p', yu.locked ? 'bad-line' : 'ok-line', yu.locked ? 'Uploaded, but YouTube kept it private until your API audit is approved. Delete it in Studio and upload there for now.' : 'On YouTube (' + yu.privacy + '): ' + yu.url));
 
   const posts = el('div', 'posts');
   (c.posts || []).forEach(p => {
@@ -411,6 +483,89 @@ function clipCard(c){
 }
 document.querySelectorAll('#filters .chip').forEach(b => b.onclick = () => { filter = b.dataset.f; document.querySelectorAll('#filters .chip').forEach(x => x.setAttribute('aria-pressed', x === b)); renderClips(true); });
 
+
+/* accounts */
+let ACC = null;
+const CHECKLIST = [
+  ['YouTube', [['yt1', 'Create the channel: YouTube, profile picture, Settings, Add or manage your channels, Create a channel', 'https://www.youtube.com/channel_switcher'],
+               ['yt2', 'Set the name, handle, picture and description in YouTube Studio, Customisation', 'https://studio.youtube.com'],
+               ['yt3', 'Connect it in Clip Engine (Settings tab) for one-click uploads', '']]],
+  ['TikTok', [['tt1', 'Sign up with a new account, then set name, username, photo and bio', 'https://www.tiktok.com/signup'],
+              ['tt2', 'Spend a day scrolling and liking videos in this niche before your first post', ''],
+              ['tt3', 'Post from your computer at tiktok.com/upload. No collab posts.', 'https://www.tiktok.com/upload']]],
+  ['Instagram', [['ig1', 'Create a new account, then set name, username, photo and bio', 'https://www.instagram.com/accounts/emailsignup/'],
+                 ['ig2', 'Switch to a professional account: Settings, Account type and tools, Creator, Digital creator', ''],
+                 ['ig3', 'Always post as a Reel. Never use Invite collaborator.', '']]],
+  ['Get paid', [['wh1', 'Join the campaign and its Discord', 'JOIN'],
+                ['wh2', 'Connect all three accounts in Whop, Settings, Connected Accounts', 'https://whop.com'],
+                ['wh3', 'Submit every post link within the deadline (Clips tab shows a countdown)', '']]]
+];
+function saveAcc(){ api('/api/accounts/save', { campaign: campaign.id, data: ACC.saved }).catch(() => {}); }
+async function loadAccounts(){
+  try { ACC = await api('/api/accounts?campaign=' + encodeURIComponent(campaign.id)); } catch (e) { toast(e.message); return; }
+  ACC.saved = ACC.saved || {}; ACC.status = ACC.status || {};
+  const d = $('#acc-displays'); d.innerHTML = '';
+  ACC.displays.forEach(n => { const b = el('button', 'chip', n); b.type = 'button'; b.setAttribute('aria-pressed', ACC.saved.display === n); b.onclick = () => { ACC.saved.display = n; saveAcc(); loadAccountsRender(); }; d.append(b); });
+  $('#acc-bio').value = ACC.saved.bio || ACC.bio; $('#acc-ytdesc').value = ACC.saved.yt_desc || ACC.youtube_description;
+  loadAccountsRender();
+}
+function loadAccountsRender(){
+  document.querySelectorAll('#acc-displays .chip').forEach(b => b.setAttribute('aria-pressed', b.textContent === ACC.saved.display));
+  const h = $('#acc-handles'); h.innerHTML = '';
+  ACC.handles.forEach(x => {
+    const r = el('div', 'hl-row'); const lab = el('label'); const rb = el('input'); rb.type = 'radio'; rb.name = 'acc-h'; rb.checked = ACC.saved.handle === x;
+    rb.onchange = () => { ACC.saved.handle = x; saveAcc(); }; lab.append(rb, el('span', null, '@' + x)); r.append(lab, el('span'));
+    const st = el('div', 'st'); const s = ACC.status[x] || {};
+    [['YT', 'youtube', 'https://www.youtube.com/@' + x], ['TT', 'tiktok', 'https://www.tiktok.com/@' + x], ['IG', 'instagram', 'https://www.instagram.com/' + x + '/']].forEach(([t, k, u]) => {
+      const a = el('a', s[k] === 'free' ? 'free' : s[k] === 'taken' ? 'taken' : '', t + (s[k] === 'free' ? ' free' : s[k] === 'taken' ? ' taken' : '')); a.href = u; a.target = '_blank'; a.rel = 'noopener'; a.title = 'Open ' + u; st.append(a); });
+    r.append(st); h.append(r);
+  });
+  const cl = $('#acc-checklist'); cl.innerHTML = ''; const done = ACC.saved.done || [];
+  CHECKLIST.forEach(([title, items]) => {
+    const g = el('div'); g.append(el('h3', null, title));
+    items.forEach(([id, text, link]) => {
+      if (link === 'JOIN') link = campaign.join_url || '';
+      const lab = el('label'); const cb = el('input'); cb.type = 'checkbox'; cb.checked = done.includes(id);
+      cb.onchange = () => { const s = new Set(ACC.saved.done || []); cb.checked ? s.add(id) : s.delete(id); ACC.saved.done = [...s]; saveAcc(); };
+      const sp = el('span', null, text); if (link){ sp.append(' '); const a = el('a', null, 'Open'); a.href = link; a.target = '_blank'; a.rel = 'noopener'; sp.append(a); }
+      lab.append(cb, sp); g.append(lab);
+    });
+    cl.append(g);
+  });
+}
+$('#acc-check').onclick = async () => {
+  const b = $('#acc-check'); b.disabled = true; b.textContent = 'Checking…';
+  try { ACC.status = await api('/api/accounts/check', { handles: ACC.handles }); loadAccountsRender(); }
+  catch (e) { toast(e.message); }
+  b.disabled = false; b.textContent = 'Check which are free';
+};
+$('#acc-bio').onchange = () => { ACC.saved.bio = $('#acc-bio').value; saveAcc(); };
+$('#acc-ytdesc').onchange = () => { ACC.saved.yt_desc = $('#acc-ytdesc').value; saveAcc(); };
+$('#acc-bio-copy').onclick = () => copy($('#acc-bio').value);
+$('#acc-yt-copy').onclick = () => copy($('#acc-ytdesc').value);
+
+/* youtube */
+let YTS = null;
+async function loadYT(){
+  try { YTS = await api('/api/youtube'); } catch (e) { return; }
+  const st = $('#yt-state'); st.innerHTML = '';
+  if (YTS.connected) st.append(el('p', 'ok-line', 'Connected to ' + (YTS.channel || 'your channel') + '. Each clip now has an Upload to YouTube button.'));
+  else if (YTS.connecting) st.append(el('p', 'hint', 'Waiting for you to approve in the browser tab Google opened…'));
+  else st.append(el('p', 'hint', YTS.has_secret ? 'Ready to connect. Press Connect YouTube channel.' : 'Not set up yet. Follow the one-time setup below.'));
+  if (YTS.error) st.append(el('p', 'bad-line', YTS.error));
+  $('#yt-connect').hidden = !!YTS.connected; $('#yt-disconnect').hidden = !YTS.connected;
+  $('#yt-setup').open = !YTS.has_secret;
+  if (YTS.connecting) setTimeout(loadYT, 2000);
+}
+$('#yt-file').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try { await api('/api/youtube/secret', { text: await f.text() }); toast('Google file added'); loadYT(); } catch (err) { toast(err.message); }
+  e.target.value = '';
+};
+$('#yt-connect').onclick = () => api('/api/youtube/connect', {}).then(() => { toast('Sign in on the Google tab that opened'); setTimeout(loadYT, 1500); }).catch(e => toast(e.message));
+$('#yt-disconnect').onclick = () => api('/api/youtube/disconnect', {}).then(loadYT);
+$('#s-ytpriv').onchange = () => api('/api/settings', { settings: { youtube_privacy: $('#s-ytpriv').value } }).then(() => toast('Saved'));
+
 /* poll */
 let first = true;
 async function poll(force){
@@ -418,7 +573,7 @@ async function poll(force){
     S = await api('/api/state'); skew = Date.now() / 1000 - S.now;
     if (first){
       $('#campaign').innerHTML = S.campaigns.map(c => `<option value="${c.id}">${c.name.replace(/</g, '')}</option>`).join('');
-      setCampaign(S.campaign || S.campaigns[0].id); bindSettings(); $('#caption-warn').hidden = S.can_caption; first = false;
+      setCampaign(S.campaign || S.campaigns[0].id); bindSettings(); $('#caption-warn').hidden = S.can_caption; $('#s-ytpriv').value = S.settings.youtube_privacy || 'public'; first = false; loadYT().then(() => renderClips(true));
     }
     renderJobs(); renderClips(force === true);
   } catch (e) { $('#jobs').innerHTML = ''; $('#jobs').append(el('p', 'empty', 'Lost contact with Clip Engine. Is its window still open?')); }

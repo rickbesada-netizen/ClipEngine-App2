@@ -4,3 +4,5 @@ imageio-ffmpeg>=0.5
 opencv-python-headless>=4.8,<5
 flask>=3.0
 numpy>=1.26
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.2
