@@ -564,7 +564,8 @@ def selftest() -> int:
     }
     try:
         import google_auth_oauthlib.flow  # noqa: F401
-        import googleapiclient.discovery  # noqa: F401
+        from googleapiclient.discovery import build
+        build("youtube", "v3", developerKey="selftest", static_discovery=True, cache_discovery=False)
         checks["youtube upload"] = True
     except Exception as e:  # noqa: BLE001
         print("youtube import error:", e)
