@@ -107,6 +107,19 @@ details summary{cursor:pointer;color:var(--signal);font-weight:600;font-size:13p
 .cl a{color:var(--signal)}
 .steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px;font-size:13.5px}
 .steps a{color:var(--signal)}
+.kit-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.kit-grid.wide{grid-template-columns:repeat(auto-fill,minmax(min(100%,360px),1fr))}
+.kit-item{display:flex;flex-direction:column;gap:6px}
+.kit-item img{width:100%;border-radius:8px;border:1px solid var(--line);display:block}
+.kit-grid:not(.wide) .kit-item img{border-radius:50%}
+.kit-texts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+@media (max-width:760px){.kit-texts{grid-template-columns:minmax(0,1fr)}}
+.kt{display:flex;flex-direction:column;gap:6px}
+.kt .cnt{font-family:var(--mono);font-size:11.5px;color:var(--muted)} .kt .cnt.over{color:var(--bad)}
+.cform{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.cform .full{grid-column:1/-1}
+@media (max-width:640px){.cform{grid-template-columns:minmax(0,1fr)}}
+pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-height:260px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:10px;margin:8px 0 0}
 .ok-line{color:var(--ok);font-weight:600;margin:0} .bad-line{color:var(--bad);margin:0;font-size:13px}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
 </style>
@@ -122,7 +135,7 @@ details summary{cursor:pointer;color:var(--signal);font-weight:600;font-size:13p
     <button role="tab" data-tab="make" aria-selected="true">Find clips</button>
     <button role="tab" data-tab="clips" aria-selected="false">Clips<span class="n" id="n-clips"></span></button>
     <button role="tab" data-tab="accounts" aria-selected="false">Accounts</button>
-    <button role="tab" data-tab="rules" aria-selected="false">Campaign rules</button>
+    <button role="tab" data-tab="rules" aria-selected="false">Campaigns</button>
     <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
   </nav>
 </div></div>
@@ -182,25 +195,63 @@ details summary{cursor:pointer;color:var(--signal);font-weight:600;font-size:13p
         <div class="row" style="justify-content:space-between"><span class="lbl">Handle (username)</span><button class="btn" id="acc-check" type="button">Check which are free</button></div>
         <div class="hl" id="acc-handles"></div>
         <p class="hint">YouTube is checked exactly. TikTok is a best guess. Instagram can't be checked, so tap IG to look. Taken names are crossed out.</p>
-        <span class="lbl">Bio (all three apps)</span>
-        <textarea id="acc-bio" rows="3"></textarea>
-        <div class="row"><button class="btn" id="acc-bio-copy" type="button">Copy bio</button></div>
-        <span class="lbl">YouTube channel description</span>
-        <textarea id="acc-ytdesc" rows="4"></textarea>
-        <div class="row"><button class="btn" id="acc-yt-copy" type="button">Copy description</button></div>
-        <p class="hint">Profile picture: the campaign's thumbnail or official creator artwork (ask in the campaign Discord). Keep "fan page, not affiliated" in the bio so the platforms don't treat the account as impersonation.</p>
       </div>
       <div class="panel">
         <h2>Set up each app</h2>
         <div class="cl" id="acc-checklist"></div>
+      </div>
+      <div class="panel" style="grid-column:1/-1">
+        <div class="row" style="justify-content:space-between"><h2>Profile pictures and banner</h2><button class="go" id="kit-make" type="button" style="font-size:17px">Make a new set</button></div>
+        <p class="hint">Use one profile picture on all three apps, and the banner on YouTube (Studio, Customisation, Branding). Once you've made clips for this campaign, one picture is built from a real frame. If the campaign gives you official artwork or a thumbnail, that's the safest choice.</p>
+        <div class="kit-grid" id="kit-avatars"></div>
+        <div class="kit-grid wide" id="kit-banners"></div>
+      </div>
+      <div class="panel" style="grid-column:1/-1">
+        <h2>Text for each app</h2>
+        <p class="hint">Written from the name and handle you picked above. Edit anything and it's kept for this campaign.</p>
+        <div class="kit-texts" id="kit-texts"></div>
       </div>
     </div>
   </section>
 
   <section id="tab-rules" hidden>
     <div class="grid">
-      <div class="panel"><h2>Rules</h2><ul class="rules" id="rules"></ul></div>
-      <div class="panel"><h2>What to look for</h2><ul class="rules" id="lookfor"></ul><h2 style="margin-top:8px">Post on</h2><p id="platforms"></p><h2 style="margin-top:8px">Required hashtags</h2><p class="mono" id="reqtags"></p></div>
+      <div class="panel">
+        <h2>Add a campaign</h2>
+        <p class="hint">Give it the campaign's brief and it fills everything in: who to clip and from where, hashtags, rules, pay, platforms and the submission deadline. Check it, fix anything, then save.</p>
+        <div class="field"><label class="lbl" for="cb-file">Upload the brief (PDF, Word, screenshot or text)</label><input type="file" id="cb-file" accept=".pdf,.docx,.txt,.md,.html,.htm,.png,.jpg,.jpeg,.webp"></div>
+        <div class="field"><label class="lbl" for="cb-url">Or paste a link: Google Doc or campaign page</label>
+          <div class="row"><input type="text" id="cb-url" class="mono" style="flex:1;min-width:0" placeholder="https://docs.google.com/document/d/..."><button class="btn" id="cb-url-go" type="button">Read link</button></div></div>
+        <details><summary>Or paste the text</summary><textarea id="cb-text" rows="6" style="margin-top:8px"></textarea><button class="btn" id="cb-text-go" type="button" style="margin-top:6px">Read text</button></details>
+        <span class="mono" id="cb-status"></span>
+        <div id="cb-form" hidden>
+          <div class="cform">
+            <div class="field"><label class="lbl" for="cf-name">Campaign / creator name</label><input type="text" id="cf-name"></div>
+            <div class="field"><label class="lbl" for="cf-pay">Pay</label><input type="text" id="cf-pay"></div>
+            <div class="field full"><label class="lbl" for="cf-sources">Clip from (one link per line)</label><textarea id="cf-sources" rows="4" class="mono"></textarea></div>
+            <div class="field"><label class="lbl" for="cf-tags">Required hashtags</label><input type="text" id="cf-tags" class="mono"></div>
+            <div class="field"><label class="lbl" for="cf-extra">Extra hashtags</label><input type="text" id="cf-extra" class="mono"></div>
+            <div class="field"><label class="lbl" for="cf-plat">Post on (comma separated)</label><input type="text" id="cf-plat"></div>
+            <div class="field"><label class="lbl" for="cf-submit">Submit within (minutes, 0 = no limit)</label><input type="number" id="cf-submit" min="0"></div>
+            <div class="field"><label class="lbl" for="cf-niche">Niche (used for names and bios)</label><input type="text" id="cf-niche"></div>
+            <div class="field"><label class="lbl" for="cf-join">Join / submit link</label><input type="text" id="cf-join" class="mono"></div>
+            <div class="field full"><label class="lbl" for="cf-keywords">Keywords that make a good moment (comma separated)</label><input type="text" id="cf-keywords"></div>
+            <div class="field full"><label class="lbl" for="cf-look">What to look for (one per line)</label><textarea id="cf-look" rows="3"></textarea></div>
+            <div class="field full"><label class="lbl" for="cf-rules">Rules (one per line)</label><textarea id="cf-rules" rows="7"></textarea></div>
+          </div>
+          <div class="row" style="margin-top:10px"><button class="go" id="cf-save" type="button">Save campaign</button><button class="btn" id="cf-cancel" type="button">Cancel</button><span class="hint" id="cf-note"></span></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="row" style="justify-content:space-between"><h2 id="cur-name">This campaign</h2><span class="row"><button class="btn" id="cb-edit" type="button">Edit</button><button class="btn" id="cb-del" type="button">Delete</button></span></div>
+        <p class="pay" id="cur-pay" style="margin:0"></p>
+        <span class="lbl">Rules</span><ul class="rules" id="rules"></ul>
+        <span class="lbl">What to look for</span><ul class="rules" id="lookfor"></ul>
+        <span class="lbl">Post on</span><p id="platforms" style="margin:0"></p>
+        <span class="lbl">Required hashtags</span><p class="mono" id="reqtags" style="margin:0"></p>
+        <span class="lbl">Clip from</span><ul class="rules mono" id="cur-sources"></ul>
+        <details id="cur-brief-box"><summary>Original brief</summary><pre class="brief" id="cur-brief"></pre></details>
+      </div>
     </div>
   </section>
 
@@ -300,6 +351,10 @@ function setCampaign(id){
   const lf = $('#lookfor'); lf.innerHTML = ''; campaign.look_for.forEach(x => lf.append(el('li', null, x)));
   $('#platforms').textContent = campaign.platforms.join(', ');
   $('#reqtags').textContent = campaign.hashtags.join(' ') || 'None';
+  $('#cur-name').textContent = campaign.name; $('#cur-pay').textContent = campaign.pay || '';
+  const cs = $('#cur-sources'); cs.innerHTML = ''; (campaign.sources || []).forEach(u => cs.append(el('li', null, u)));
+  if (!campaign.sources.length) cs.append(el('li', null, 'None listed'));
+  $('#cur-brief').textContent = campaign.brief || ''; $('#cur-brief-box').hidden = !campaign.brief;
 }
 $('#campaign').onchange = e => { setCampaign(e.target.value); api('/api/settings', { campaign: campaign.id }); if (!$('#tab-accounts').hidden) loadAccounts(); };
 
@@ -506,8 +561,7 @@ async function loadAccounts(){
   ACC.saved = ACC.saved || {}; ACC.status = ACC.status || {};
   const d = $('#acc-displays'); d.innerHTML = '';
   ACC.displays.forEach(n => { const b = el('button', 'chip', n); b.type = 'button'; b.setAttribute('aria-pressed', ACC.saved.display === n); b.onclick = () => { ACC.saved.display = n; saveAcc(); loadAccountsRender(); }; d.append(b); });
-  $('#acc-bio').value = ACC.saved.bio || ACC.bio; $('#acc-ytdesc').value = ACC.saved.yt_desc || ACC.youtube_description;
-  loadAccountsRender();
+  loadAccountsRender(); loadKit();
 }
 function loadAccountsRender(){
   document.querySelectorAll('#acc-displays .chip').forEach(b => b.setAttribute('aria-pressed', b.textContent === ACC.saved.display));
@@ -539,10 +593,86 @@ $('#acc-check').onclick = async () => {
   catch (e) { toast(e.message); }
   b.disabled = false; b.textContent = 'Check which are free';
 };
-$('#acc-bio').onchange = () => { ACC.saved.bio = $('#acc-bio').value; saveAcc(); };
-$('#acc-ytdesc').onchange = () => { ACC.saved.yt_desc = $('#acc-ytdesc').value; saveAcc(); };
-$('#acc-bio-copy').onclick = () => copy($('#acc-bio').value);
-$('#acc-yt-copy').onclick = () => copy($('#acc-ytdesc').value);
+
+/* channel kit */
+const KIT_FIELDS = [['youtube_description', 'YouTube channel description', 'Studio, Customisation, Basic info'], ['youtube_keywords', 'YouTube channel keywords', 'Studio, Settings, Channel, Keywords'],
+                    ['tiktok_bio', 'TikTok bio', 'Edit profile, Bio'], ['instagram_bio', 'Instagram bio', 'Edit profile, Bio']];
+async function loadKit(){
+  let k; try { k = await api('/api/kit?campaign=' + encodeURIComponent(campaign.id)); } catch (e) { return; }
+  const av = $('#kit-avatars'), bn = $('#kit-banners'); av.innerHTML = ''; bn.innerHTML = '';
+  k.images.forEach(im => {
+    const it = el('div', 'kit-item'); const img = el('img'); img.src = im.url + '?t=' + Date.now(); img.alt = im.kind === 'banner' ? 'YouTube banner option' : 'Profile picture option';
+    const a = el('a', 'btn', im.kind === 'banner' ? 'Save banner' : 'Save picture'); a.href = im.url + '?download=1';
+    it.append(img, a); (im.kind === 'banner' ? bn : av).append(it);
+  });
+  if (!k.images.length) av.append(el('p', 'empty', 'Press Make a new set to create profile pictures and a YouTube banner for this campaign.'));
+  const box = $('#kit-texts'); box.innerHTML = ''; const saved = (ACC && ACC.saved.kit) || {};
+  const head = el('div', 'kt full'); head.style.gridColumn = '1/-1';
+  head.append(el('span', 'lbl', 'Name and handle on every app'), el('div', 'mono', k.texts.display + '  ·  @' + k.texts.handle)); box.append(head);
+  KIT_FIELDS.forEach(([key, label, where]) => {
+    const d = el('div', 'kt'); d.append(el('span', 'lbl', label)); d.append(el('span', 'hint', 'Where: ' + where));
+    const ta = el('textarea'); ta.id = 'kt-' + key; ta.rows = key === 'youtube_description' ? 7 : 3; ta.value = saved[key] || k.texts[key];
+    const lim = (k.texts.limits || {})[key]; const cnt = el('span', 'cnt');
+    const upd = () => { cnt.textContent = ta.value.length + (lim ? ' / ' + lim : '') + ' characters'; cnt.classList.toggle('over', !!(lim && ta.value.length > lim)); };
+    ta.oninput = upd; ta.onchange = () => { ACC.saved.kit = { ...(ACC.saved.kit || {}), [key]: ta.value }; saveAcc(); }; upd();
+    const row = el('div', 'row'); const cp = el('button', 'btn', 'Copy'); cp.type = 'button'; cp.onclick = () => copy(ta.value);
+    const rs = el('button', 'btn', 'Reset'); rs.type = 'button'; rs.onclick = () => { ta.value = k.texts[key]; upd(); ACC.saved.kit = { ...(ACC.saved.kit || {}) }; delete ACC.saved.kit[key]; saveAcc(); };
+    row.append(cp, rs, cnt); d.append(ta, row); box.append(d);
+  });
+}
+$('#kit-make').onclick = async () => {
+  const b = $('#kit-make'); b.disabled = true; b.textContent = 'Making…';
+  try { const r = await api('/api/kit/generate', { campaign: campaign.id }); toast(r.from_clip ? 'New set made, including one from your clips' : 'New set made'); await loadKit(); }
+  catch (e) { toast(e.message); }
+  b.disabled = false; b.textContent = 'Make a new set';
+};
+
+/* campaigns: add / edit */
+let DRAFT = null;
+function fillForm(c){
+  DRAFT = { ...c };
+  $('#cf-name').value = c.name || ''; $('#cf-pay').value = c.pay || ''; $('#cf-sources').value = (c.sources || []).join('\n');
+  $('#cf-tags').value = (c.hashtags || []).join(' '); $('#cf-extra').value = (c.extra_tags || []).join(' ');
+  $('#cf-plat').value = (c.platforms || []).join(', '); $('#cf-submit').value = c.submit_within_min || 0; $('#cf-niche').value = c.niche || '';
+  $('#cf-join').value = c.join_url || ''; $('#cf-keywords').value = (c.keywords || []).join(', ');
+  $('#cf-look').value = (c.look_for || []).join('\n'); $('#cf-rules').value = (c.rules || []).join('\n');
+  $('#cf-note').textContent = c.exists ? 'A campaign with this name exists. Saving updates it.' : '';
+  $('#cb-form').hidden = false; $('#cf-name').focus();
+}
+async function readBrief(req){
+  $('#cb-status').textContent = 'Reading the brief… scanned pages take a few seconds each.';
+  try {
+    const r = req instanceof FormData ? await (async () => { const x = await fetch('/api/campaigns/import', { method: 'POST', body: req }); const j = await x.json(); if (!x.ok) throw new Error(j.error || 'Failed'); return j; })()
+                                      : await api('/api/campaigns/import', req);
+    $('#cb-status').textContent = 'Done. Check the details below, then save.'; fillForm(r.campaign);
+  } catch (e) { $('#cb-status').textContent = e.message; }
+}
+$('#cb-file').onchange = e => { const f = e.target.files[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); readBrief(fd); e.target.value = ''; };
+$('#cb-url-go').onclick = () => { const u = $('#cb-url').value.trim(); if (!/^https?:\/\//.test(u)){ toast('Paste a full link'); return; } readBrief({ url: u }); };
+$('#cb-text-go').onclick = () => { const t = $('#cb-text').value.trim(); if (t.length < 30){ toast('Paste more of the brief'); return; } readBrief({ text: t }); };
+$('#cf-cancel').onclick = () => { $('#cb-form').hidden = true; DRAFT = null; $('#cb-status').textContent = ''; };
+$('#cb-edit').onclick = () => { fillForm({ ...campaign, exists: false, editing: true }); $('#cb-status').textContent = 'Editing ' + campaign.name + '.'; };
+$('#cb-del').onclick = async () => {
+  const b = $('#cb-del'); if (!b.dataset.sure){ b.dataset.sure = 1; b.textContent = 'Click again to delete'; setTimeout(() => { delete b.dataset.sure; b.textContent = 'Delete'; }, 4000); return; }
+  try { await api('/api/campaigns/' + encodeURIComponent(campaign.id), null, 'DELETE'); toast('Campaign deleted'); await refreshCampaigns(); } catch (e) { toast(e.message); }
+};
+const splitList = (v, sep) => v.split(sep).map(x => x.trim()).filter(Boolean);
+$('#cf-save').onclick = async () => {
+  const c = { ...DRAFT,
+    name: $('#cf-name').value.trim(), pay: $('#cf-pay').value.trim(), sources: splitList($('#cf-sources').value, /\n/),
+    hashtags: splitList($('#cf-tags').value, /[\s,]+/), extra_tags: splitList($('#cf-extra').value, /[\s,]+/),
+    platforms: splitList($('#cf-plat').value, /,/), submit_within_min: +$('#cf-submit').value || 0, niche: $('#cf-niche').value.trim(),
+    join_url: $('#cf-join').value.trim(), keywords: splitList($('#cf-keywords').value, /,/), look_for: splitList($('#cf-look').value, /\n/), rules: splitList($('#cf-rules').value, /\n/) };
+  if (!(DRAFT && DRAFT.editing)) delete c.id;
+  delete c.editing;
+  try { const r = await api('/api/campaigns/upsert', { campaign: c }); toast('Saved ' + c.name); $('#cb-form').hidden = true; $('#cb-status').textContent = ''; await refreshCampaigns(r.id); }
+  catch (e) { toast(e.message); }
+};
+async function refreshCampaigns(selectId){
+  S = await api('/api/state');
+  $('#campaign').innerHTML = S.campaigns.map(c => `<option value="${c.id}">${c.name.replace(/</g, '')}</option>`).join('');
+  setCampaign(selectId || S.campaign || S.campaigns[0].id);
+}
 
 /* youtube */
 let YTS = null;

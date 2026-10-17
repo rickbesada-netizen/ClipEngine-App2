@@ -18,6 +18,8 @@ from flask import Flask, jsonify, request, send_from_directory
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pipeline as P  # noqa: E402
 import youtube as YT  # noqa: E402
+import campaign_import as CI  # noqa: E402
+import kit as KIT  # noqa: E402
 
 APP = Flask(__name__, static_folder=str(P.APP_DIR / "static"), static_url_path="/static")
 DB_PATH = P.DATA / "db.json"
@@ -547,6 +549,120 @@ def yt_upload(cid):
     return jsonify(ok=True)
 
 
+# ---------------------------------------------------------------- campaigns from briefs
+@APP.post("/api/campaigns/import")
+def campaign_import():
+    try:
+        if request.files.get("file"):
+            f = request.files["file"]
+            text = CI.text_from_file(f.filename or "brief", f.read())
+        else:
+            body = request.get_json(force=True) or {}
+            if body.get("url"):
+                text = CI.text_from_url(body["url"].strip())
+            else:
+                text = body.get("text", "")
+        if len(text.strip()) < 30:
+            return jsonify(error="Couldn't find readable text in that. Try a PDF, a Word file, a screenshot, or paste the text."), 400
+        draft = CI.parse(text)
+        st = DB["settings"]
+        if st.get("use_ollama") and st.get("ollama_model"):
+            draft = CI.refine_with_ollama(text, draft, st["ollama_model"])
+        existing = {c["id"] for c in campaigns()}
+        if draft["id"] in existing:
+            draft["exists"] = True
+        return jsonify(campaign=draft)
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        return jsonify(error=str(e)[:300]), 400
+
+
+@APP.post("/api/campaigns/upsert")
+def campaign_upsert():
+    c = (request.get_json(force=True) or {}).get("campaign") or {}
+    if not c.get("name"):
+        return jsonify(error="Give the campaign a name."), 400
+    c["id"] = re.sub(r"[^a-z0-9]+", "", (c.get("id") or c["name"]).lower())[:24] or uuid.uuid4().hex[:6]
+    c.pop("exists", None)
+    for k in ("sources", "hashtags", "extra_tags", "keywords", "look_for", "platforms", "rules"):
+        v = c.get(k) or []
+        c[k] = [x.strip() for x in (v if isinstance(v, list) else str(v).splitlines()) if str(x).strip()]
+    c["hashtags"] = [h if h.startswith("#") else "#" + h for h in c["hashtags"]]
+    c["extra_tags"] = [h if h.startswith("#") else "#" + h for h in c["extra_tags"]]
+    c["submit_within_min"] = int(c.get("submit_within_min") or 0)
+    c.setdefault("look_for_short", "funny, memorable or quotable")
+    c.setdefault("handle_base", c["id"][:14])
+    lst = campaigns()
+    idx = next((i for i, x in enumerate(lst) if x["id"] == c["id"]), None)
+    if idx is None:
+        lst.insert(0, c)
+    else:
+        lst[idx] = {**lst[idx], **c}
+    CAMPAIGNS_PATH.write_text(json.dumps(lst, indent=2), encoding="utf-8")
+    with LOCK:
+        DB["campaign"] = c["id"]
+    save_db()
+    return jsonify(ok=True, id=c["id"])
+
+
+@APP.delete("/api/campaigns/<cid>")
+def campaign_delete(cid):
+    lst = campaigns()
+    if len(lst) <= 1:
+        return jsonify(error="Keep at least one campaign."), 400
+    lst = [c for c in lst if c["id"] != cid]
+    CAMPAIGNS_PATH.write_text(json.dumps(lst, indent=2), encoding="utf-8")
+    with LOCK:
+        if DB.get("campaign") == cid:
+            DB["campaign"] = lst[0]["id"]
+    save_db()
+    return jsonify(ok=True)
+
+
+# ---------------------------------------------------------------- channel kit
+def _kit_names(camp):
+    acc = DB.setdefault("accounts", {}).get(camp["id"], {})
+    names = _campaign_names(camp)
+    return acc.get("display") or names["displays"][0], acc.get("handle") or names["handles"][0]
+
+
+@APP.get("/api/kit")
+def kit_get():
+    camp = campaign_by_id(request.args.get("campaign") or DB.get("campaign") or campaigns()[0]["id"])
+    display, handle = _kit_names(camp)
+    d = KIT.KIT_DIR / camp["id"]
+    imgs = sorted([p.name for p in d.glob("*.png")], key=lambda n: (d / n).stat().st_mtime, reverse=True) if d.exists() else []
+    return jsonify(texts=KIT.texts(camp, display, handle), images=[{"name": n, "kind": "banner" if n.startswith("banner") else "avatar",
+                                                                    "url": f"/kit/{camp['id']}/{n}"} for n in imgs[:14]])
+
+
+@APP.post("/api/kit/generate")
+def kit_generate():
+    body = request.get_json(force=True) or {}
+    camp = campaign_by_id(body.get("campaign"))
+    display, _ = _kit_names(camp)
+    seed = int(body.get("seed") or int(time.time()) % 100000)
+    d = KIT.KIT_DIR / camp["id"]
+    if d.exists():
+        for f in d.glob("*.png"):
+            f.unlink(missing_ok=True)
+    try:
+        KIT.avatars(camp, display, seed)
+        KIT.banners(camp, display, seed)
+        clip = next((c for c in DB["clips"] if c["campaign"] == camp["id"] and (P.CLIP_DIR / c["file"]).exists()), None)
+        if clip:
+            KIT.avatar_from_clip(camp, P.CLIP_DIR / clip["file"], min(2.0, (clip["end"] - clip["start"]) / 2), seed)
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        return jsonify(error=str(e)[:300]), 500
+    return jsonify(ok=True, from_clip=bool(clip))
+
+
+@APP.get("/kit/<cid>/<name>")
+def kit_file(cid, name):
+    return send_from_directory(KIT.KIT_DIR / Path(cid).name, Path(name).name, as_attachment=request.args.get("download") == "1")
+
+
 def selftest() -> int:
     """Checks every heavy dependency loads. Used by the Windows build to test the exe."""
     import cv2
@@ -562,6 +678,16 @@ def selftest() -> int:
         "caption font": (P.FONT_DIR / "Poppins-Bold.ttf").exists(),
         "campaigns": bool(campaigns()),
     }
+    try:
+        from PIL import Image
+        import pypdfium2  # noqa: F401
+        import docx  # noqa: F401
+        CI._ocr()
+        checks["read campaign briefs (PDF, Word, scans)"] = True
+        checks["channel kit images"] = Path(KIT.FONT).exists() and Image.new("RGB", (4, 4)) is not None
+    except Exception as e:  # noqa: BLE001
+        print("brief/kit import error:", e)
+        checks["read campaign briefs (PDF, Word, scans)"] = False
     try:
         import google_auth_oauthlib.flow  # noqa: F401
         from googleapiclient.discovery import build
