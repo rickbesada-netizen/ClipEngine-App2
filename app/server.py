@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -85,6 +86,55 @@ def slug(s: str, n: int = 40) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (s or "clip").lower()).strip("-")[:n] or "clip"
 
 
+
+# ---------------------------------------------------------------- clip files: one folder per campaign, readable names
+def campaign_folder_name(camp_id: str) -> str:
+    camp = next((c for c in campaigns() if c["id"] == camp_id), None)
+    name = camp["name"] if camp else camp_id
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", name).strip().rstrip(". ") or camp_id
+
+
+def new_clip_relpath(camp_id: str, title: str, keep: str | None = None) -> str:
+    folder = campaign_folder_name(camp_id)
+    (P.CLIP_DIR / folder).mkdir(parents=True, exist_ok=True)
+    base = re.sub(r"#\w+", "", title or "Clip")
+    base = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", base).strip().rstrip(". ")[:80].strip() or "Clip"
+    n, k = base, 2
+    while (P.CLIP_DIR / folder / f"{n}.mp4").exists() and f"{folder}/{n}.mp4" != keep:
+        n = f"{base} ({k})"; k += 1
+    return f"{folder}/{n}.mp4"
+
+
+def clip_path(c: dict) -> Path:
+    return P.CLIP_DIR / Path(c["file"])
+
+
+def thumb_path(c: dict) -> Path:
+    return P.THUMB_DIR / f"{c['id']}.jpg"
+
+
+def organise_clips():
+    """Moves clips from older versions (all in one folder) into campaign folders with readable names."""
+    changed = False
+    for c in DB["clips"]:
+        try:
+            if "/" not in c["file"]:
+                old = P.CLIP_DIR / c["file"]
+                if old.exists():
+                    rel = new_clip_relpath(c["campaign"], c.get("hook") or c.get("source_title") or "Clip")
+                    shutil.move(str(old), str(P.CLIP_DIR / rel))
+                    c["file"] = rel
+                    changed = True
+                oldt = P.CLIP_DIR / (c.get("thumb") or "")
+                if c.get("thumb") and oldt.is_file():
+                    shutil.move(str(oldt), str(thumb_path(c)))
+                c["thumb"] = f"{c['id']}.jpg"
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+    if changed:
+        save_db()
+
+
 # ---------------------------------------------------------------- worker
 QUEUE: list[str] = []
 WAKE = threading.Event()
@@ -157,14 +207,13 @@ def process(j: dict):
         hook = c.get("ai_title") or P.hook_line(c["text"], used_hooks)
         used_hooks.add(hook)
         cid = uuid.uuid4().hex[:8]
-        name = f"{slug(camp['name'], 14)}-{slug(meta['title'], 30)}-{k + 1:02d}-{cid}.mp4"
-        clip = {"id": cid, "job": j["id"], "campaign": camp["id"], "file": name, "thumb": name.replace(".mp4", ".jpg"),
+        name = new_clip_relpath(camp["id"], hook)
+        clip = {"id": cid, "job": j["id"], "campaign": camp["id"], "file": name, "thumb": f"{cid}.jpg",
                 "source_title": meta["title"], "source_url": meta["url"], "source_path": str(path),
                 "start": round(c["start"], 2), "end": round(c["end"], 2), "score": c["score"], "reasons": c["reasons"],
                 "text": c["text"], "hook": hook, "caption": P.caption_text(hook, camp),
                 "status": "ready", "posts": [], "created": time.time()}
-        out = P.CLIP_DIR / name
-        r = P.render_clip(path, info, clip, words, settings, out)
+        r = P.render_clip(path, info, clip, words, settings, clip_path(clip), thumb_path(clip))
         clip.update(r)
         clip["words"] = [w for w in words if clip["start"] - 1 <= w["s"] <= clip["end"] + 1]
         clip["src_w"], clip["src_h"] = info["w"], info["h"]
@@ -254,13 +303,13 @@ def yt_batch():
     camp = campaign_by_id(body.get("campaign"))
     want = set(body.get("ids") or [])
     with LOCK:
-        pool = [c for c in DB["clips"] if c["campaign"] == camp["id"] and (P.CLIP_DIR / c["file"]).exists()
+        pool = [c for c in DB["clips"] if c["campaign"] == camp["id"] and clip_path(c).exists()
                 and not any(p.get("platform") == "YouTube Shorts" for p in c.get("posts", []))
                 and (c["id"] in want if want else not c.get("yt_batch"))]
     pool = sorted(pool, key=lambda c: c.get("created", 0))[:15]
     if not pool:
         return jsonify(error="No new clips to batch for this campaign. Make more clips, or every clip is already in a batch."), 400
-    folder = P.DATA / "YouTube uploads" / f"{camp['name']} {time.strftime('%Y-%m-%d %H%M')}"
+    folder = P.CLIP_DIR / campaign_folder_name(camp["id"]) / "YouTube uploads" / time.strftime("%Y-%m-%d %H%M")
     folder.mkdir(parents=True, exist_ok=True)
     used = set()
     for c in pool:
@@ -270,7 +319,7 @@ def yt_batch():
         while n.lower() in used:
             n = f"{name} {k}"; k += 1
         used.add(n.lower())
-        shutil.copy2(P.CLIP_DIR / c["file"], folder / f"{n}.mp4")
+        shutil.copy2(clip_path(c), folder / f"{n}.mp4")
         with LOCK:
             c["yt_batch"] = str(folder); c["yt_title"] = title
     save_db()
@@ -339,6 +388,13 @@ def move_clips():
         for c in DB["clips"]:
             if c["campaign"] == src:
                 c["campaign"] = dst
+                try:
+                    if clip_path(c).exists():
+                        rel = new_clip_relpath(dst, c.get("hook") or "Clip")
+                        shutil.move(str(clip_path(c)), str(P.CLIP_DIR / rel))
+                        c["file"] = rel
+                except Exception:  # noqa: BLE001
+                    traceback.print_exc()
                 c["caption"] = P.caption_text(c.get("hook") or "", camp)
                 c.pop("yt_batch", None); c.pop("yt_title", None)
                 n += 1
@@ -408,6 +464,11 @@ def index():
 @APP.get("/clips/<path:name>")
 def clip_file(name):
     return send_from_directory(P.CLIP_DIR, name)
+
+
+@APP.get("/thumbs/<name>")
+def thumb_file(name):
+    return send_from_directory(P.THUMB_DIR, Path(name).name)
 
 
 @APP.get("/api/state")
@@ -539,19 +600,20 @@ def rerender(cid):
     settings = {**DB["settings"], "layout": body.get("layout") or DB["settings"]["layout"]}
     info = {"w": c["src_w"], "h": c["src_h"]}
     words = c.get("words", [])
-    new_name = c["file"].rsplit("-", 1)[0] + f"-{uuid.uuid4().hex[:6]}.mp4"
+    tmp = P.WORK_DIR / f"rerender-{c['id']}.mp4"
     try:
-        r = P.render_clip(src, info, c2, words, settings, P.CLIP_DIR / new_name)
+        r = P.render_clip(src, info, c2, words, settings, tmp, thumb_path(c))
     except Exception as e:  # noqa: BLE001
         return jsonify(error=str(e)[:300]), 500
     with LOCK:
-        old = P.CLIP_DIR / c["file"]
-        for f in (old, old.with_suffix(".jpg")):
-            try:
-                f.unlink()
-            except OSError:
-                pass
-        c.update(start=c2["start"], end=c2["end"], hook=c2["hook"], file=new_name, thumb=new_name.replace(".mp4", ".jpg"), **r)
+        old = clip_path(c)
+        try:
+            old.unlink()
+        except OSError:
+            pass
+        new_name = new_clip_relpath(c["campaign"], c2["hook"], keep=c["file"])
+        shutil.move(str(tmp), str(P.CLIP_DIR / new_name))
+        c.update(start=c2["start"], end=c2["end"], hook=c2["hook"], file=new_name, thumb=f"{c['id']}.jpg", **r)
     save_db()
     return jsonify(ok=True)
 
@@ -561,7 +623,7 @@ def delete_clip(cid):
     with LOCK:
         c = clip_by_id(cid)
         if c:
-            for f in (P.CLIP_DIR / c["file"], P.CLIP_DIR / c["thumb"]):
+            for f in (clip_path(c), thumb_path(c)):
                 try:
                     f.unlink()
                 except OSError:
@@ -575,8 +637,13 @@ def delete_clip(cid):
 def open_folder():
     body = request.get_json(silent=True) or {}
     target = P.CLIP_DIR
+    if body.get("campaign"):
+        target = P.CLIP_DIR / campaign_folder_name(body["campaign"])
+        target.mkdir(parents=True, exist_ok=True)
     if body.get("file"):
-        target = P.CLIP_DIR / Path(body["file"]).name
+        cand = (P.CLIP_DIR / body["file"]).resolve()
+        if P.CLIP_DIR.resolve() in cand.parents:
+            target = cand
     try:
         if os.name == "nt":
             if target.is_file():
@@ -746,7 +813,7 @@ def yt_upload(cid):
 
     def run():
         try:
-            r = YT.upload(P.CLIP_DIR / c["file"], title, c.get("caption", ""), tags, privacy,
+            r = YT.upload(clip_path(c), title, c.get("caption", ""), tags, privacy,
                           lambda f: c["yt_upload"].update(progress=round(f, 3)))
             with LOCK:
                 c["yt_upload"] = {"state": "done", "progress": 1, **r}
@@ -863,9 +930,9 @@ def kit_generate():
     try:
         KIT.avatars(camp, display, seed)
         KIT.banners(camp, display, seed)
-        clip = next((c for c in DB["clips"] if c["campaign"] == camp["id"] and (P.CLIP_DIR / c["file"]).exists()), None)
+        clip = next((c for c in DB["clips"] if c["campaign"] == camp["id"] and clip_path(c).exists()), None)
         if clip:
-            KIT.avatar_from_clip(camp, P.CLIP_DIR / clip["file"], min(2.0, (clip["end"] - clip["start"]) / 2), seed)
+            KIT.avatar_from_clip(camp, clip_path(clip), min(2.0, (clip["end"] - clip["start"]) / 2), seed)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return jsonify(error=str(e)[:300]), 500
@@ -927,6 +994,7 @@ def selftest() -> int:
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
         sys.exit(selftest())
+    organise_clips()
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=watcher, daemon=True).start()
     url = f"http://127.0.0.1:{PORT}"

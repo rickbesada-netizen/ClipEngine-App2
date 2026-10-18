@@ -195,7 +195,7 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
           <button class="chip" data-f="posted" aria-pressed="false">Posted, not submitted</button>
           <button class="chip" data-f="submitted" aria-pressed="false">Submitted</button>
         </div>
-        <button class="btn" id="open-folder" type="button">Open clips folder</button>
+        <button class="btn" id="open-folder" type="button">Open this campaign's folder</button>
       </div>
       <div class="clips" id="clips"></div>
     </div>
@@ -441,7 +441,7 @@ async function loadOllama(){
   } catch (e) {}
 }
 $('#cleanup').onclick = async () => { try { const r = await api('/api/cleanup', {}); toast('Freed ' + r.freed_mb + ' MB'); } catch (e) { toast(e.message); } };
-$('#open-folder').onclick = () => api('/api/open', {}).catch(e => toast(e.message));
+$('#open-folder').onclick = () => api('/api/open', { campaign: campaign.id }).catch(e => toast(e.message));
 
 /* jobs */
 function renderJobs(){
@@ -513,7 +513,7 @@ function renderClips(force){
 }
 function clipCard(c){
   const card = el('div', 'clip');
-  const v = el('video'); v.src = '/clips/' + encodeURIComponent(c.file); v.poster = '/clips/' + encodeURIComponent(c.thumb); v.controls = true; v.preload = 'none'; v.playsInline = true; card.append(v);
+  const v = el('video'); v.src = '/clips/' + c.file.split('/').map(encodeURIComponent).join('/'); v.poster = '/thumbs/' + encodeURIComponent(c.thumb || (c.id + '.jpg')); v.controls = true; v.preload = 'none'; v.playsInline = true; card.append(v);
   const m = el('div', 'meta'); card.append(m);
   const tags = el('div', 'tags');
   tags.append(el('span', 'tag st-' + c.status, { ready: 'Ready to post', posted: 'Posted', submitted: 'Submitted' }[c.status] || c.status));

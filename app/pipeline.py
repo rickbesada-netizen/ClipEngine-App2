@@ -24,9 +24,10 @@ else:
 DATA = ROOT / "ClipEngine data" if getattr(sys, "frozen", False) else ROOT / "data"
 DL_DIR = DATA / "downloads"
 CLIP_DIR = DATA / "clips"
+THUMB_DIR = DATA / "thumbs"
 WORK_DIR = DATA / "work"
 FONT_DIR = APP_DIR / "fonts"
-for d in (DL_DIR, CLIP_DIR, WORK_DIR):
+for d in (DL_DIR, CLIP_DIR, WORK_DIR, THUMB_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 OUT_W, OUT_H = 1080, 1920
@@ -593,7 +594,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 # ---------------------------------------------------------------- render
-def render_clip(src: Path, info: dict, clip: dict, words: list[dict], settings: dict, out_path: Path) -> dict:
+def render_clip(src: Path, info: dict, clip: dict, words: list[dict], settings: dict, out_path: Path, thumb: Path | None = None) -> dict:
     a, b = float(clip["start"]), float(clip["end"])
     w, h = info["w"], info["h"]
     faces = []
@@ -602,7 +603,9 @@ def render_clip(src: Path, info: dict, clip: dict, words: list[dict], settings: 
         faces = analyse_faces(src, a, b, w, h)
     layout = choose_layout(faces, samples, w, h, settings.get("layout", "auto"))
     vf, margin = build_filter(layout, w, h, faces, a, b)
-    work = WORK_DIR / out_path.stem
+    import uuid
+    work = WORK_DIR / ("r" + uuid.uuid4().hex[:10])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
     fonts = work / "fonts"
     if not fonts.exists():
@@ -620,7 +623,7 @@ def render_clip(src: Path, info: dict, clip: dict, words: list[dict], settings: 
            "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
            "-movflags", "+faststart", str(out_path)]
     run(cmd, cwd=work)
-    thumb = out_path.with_suffix(".jpg")
+    thumb = thumb or out_path.with_suffix(".jpg")
     try:
         run([FFMPEG, "-y", "-ss", "1.0", "-i", str(out_path), "-frames:v", "1", "-vf", "scale=360:-2", str(thumb)])
     except Exception:
