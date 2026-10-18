@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from pathlib import Path
 
 import pipeline as P
 
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.readonly"]
+SCOPES = ["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.readonly",
+          "https://www.googleapis.com/auth/youtube"]  # last one lets the app update channel branding
 SECRET = P.DATA / "youtube_client_secret.json"
 TOKEN = P.DATA / "youtube_token.json"
 STATE = {"connecting": False, "error": None, "channel": None}
@@ -38,6 +40,7 @@ def _service():
 
 def status() -> dict:
     out = {"has_secret": SECRET.exists(), "connected": False, "channel": STATE.get("channel"),
+           "channel_id": STATE.get("channel_id"), "can_brand": _granted_branding(),
            "connecting": STATE["connecting"], "error": STATE["error"]}
     if TOKEN.exists():
         try:
@@ -46,6 +49,7 @@ def status() -> dict:
                 r = _service().channels().list(part="snippet", mine=True).execute()
                 items = r.get("items") or []
                 STATE["channel"] = out["channel"] = items[0]["snippet"]["title"] if items else "(no channel on this Google account)"
+                STATE["channel_id"] = out["channel_id"] = items[0]["id"] if items else None
         except Exception as e:  # noqa: BLE001
             out["error"] = f"Connection expired: {str(e)[:150]}. Press Connect again."
             out["connected"] = False
@@ -120,3 +124,60 @@ def upload(path: Path, title: str, description: str, tags: list[str], privacy: s
         pass
     return {"id": vid, "url": f"https://www.youtube.com/shorts/{vid}", "privacy": actual,
             "locked": privacy != "private" and actual == "private"}
+
+
+def _granted_branding() -> bool:
+    try:
+        data = json.loads(TOKEN.read_text(encoding="utf-8"))
+        return "https://www.googleapis.com/auth/youtube" in (data.get("scopes") or [])
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _keywords(text: str) -> str:
+    """YouTube wants space-separated keywords, with multi-word ones in quotes."""
+    out = []
+    for k in re.split(r"[,\n]+", text or ""):
+        k = k.strip().strip('"').replace('"', "")
+        if k:
+            out.append(f'"{k}"' if " " in k else k)
+    kw = " ".join(dict.fromkeys(out))
+    return kw[:500]
+
+
+def apply_branding(banner: Path | None, description: str | None, keywords: str | None) -> dict:
+    """Sets the channel banner, description and keywords. YouTube's API can't change the profile picture."""
+    from googleapiclient.http import MediaFileUpload
+    from PIL import Image
+
+    if not _granted_branding():
+        raise RuntimeError("Clip Engine needs one more permission to edit your channel. In Settings press Disconnect, then Connect YouTube channel again.")
+    yt = _service()
+    r = yt.channels().list(part="brandingSettings", mine=True).execute()
+    items = r.get("items") or []
+    if not items:
+        raise RuntimeError("This Google account has no YouTube channel.")
+    ch = items[0]
+    bs = ch.get("brandingSettings") or {}
+    chan = dict(bs.get("channel") or {})
+    done = []
+    if description is not None:
+        chan["description"] = description[:1000]; done.append("description")
+    if keywords is not None:
+        chan["keywords"] = _keywords(keywords); done.append("keywords")
+    body = {"id": ch["id"], "brandingSettings": {"channel": chan}}
+    if banner is not None:
+        jpg = banner.with_suffix(".upload.jpg")
+        im = Image.open(banner).convert("RGB")
+        if im.size[0] < 2048 or abs(im.size[0] / im.size[1] - 16 / 9) > 0.01:
+            im = im.resize((2560, 1440), Image.LANCZOS)
+        q = 92
+        im.save(jpg, "JPEG", quality=q)
+        while jpg.stat().st_size > 5_800_000 and q > 50:
+            q -= 10; im.save(jpg, "JPEG", quality=q)
+        res = yt.channelBanners().insert(media_body=MediaFileUpload(str(jpg), mimetype="image/jpeg")).execute()
+        jpg.unlink(missing_ok=True)
+        body["brandingSettings"]["image"] = {"bannerExternalUrl": res["url"]}
+        done.append("banner")
+    yt.channels().update(part="brandingSettings", body=body).execute()
+    return {"updated": done, "channel_id": ch["id"]}

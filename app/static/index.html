@@ -221,6 +221,11 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
         <p class="hint">Use one profile picture on all three apps, and the banner on YouTube (Studio, Customisation, Branding). Once you've made clips for this campaign, one picture is built from a real frame. If the campaign gives you official artwork or a thumbnail, that's the safest choice.</p>
         <div class="kit-grid" id="kit-avatars"></div>
         <div class="kit-grid wide" id="kit-banners"></div>
+        <div class="due" id="brand-box" style="border-left-color:var(--signal);background:color-mix(in srgb,var(--signal) 7%,var(--surface))">
+          <strong>Put it on your YouTube channel automatically</strong>
+          <span class="hint">Sets the banner you picked, the channel description and the keywords below in one go. YouTube doesn't let apps change the profile picture, so for that press Save picture, then <a id="pfp-link" href="https://studio.youtube.com" target="_blank" rel="noopener">open Studio, Customisation, Profile</a> and upload it (about 20 seconds).</span>
+          <div class="row"><button class="go" id="brand-apply" type="button" style="font-size:17px">Apply to my YouTube channel</button><span class="hint" id="brand-msg"></span></div>
+        </div>
       </div>
       <div class="panel" style="grid-column:1/-1">
         <h2>Text for each app</h2>
@@ -580,7 +585,7 @@ async function loadAccounts(){
   ACC.saved = ACC.saved || {}; ACC.status = ACC.status || {};
   const d = $('#acc-displays'); d.innerHTML = '';
   ACC.displays.forEach(n => { const b = el('button', 'chip', n); b.type = 'button'; b.setAttribute('aria-pressed', ACC.saved.display === n); b.onclick = () => { ACC.saved.display = n; saveAcc(); loadAccountsRender(); }; d.append(b); });
-  loadAccountsRender(); loadKit();
+  loadAccountsRender(); loadKit(); loadYT().then(brandState);
 }
 function loadAccountsRender(){
   document.querySelectorAll('#acc-displays .chip').forEach(b => b.setAttribute('aria-pressed', b.textContent === ACC.saved.display));
@@ -622,7 +627,14 @@ async function loadKit(){
   k.images.forEach(im => {
     const it = el('div', 'kit-item'); const img = el('img'); img.src = im.url + '?t=' + Date.now(); img.alt = im.kind === 'banner' ? 'YouTube banner option' : 'Profile picture option';
     const a = el('a', 'btn', im.kind === 'banner' ? 'Save banner' : 'Save picture'); a.href = im.url + '?download=1';
-    it.append(img, a); (im.kind === 'banner' ? bn : av).append(it);
+    it.append(img, a);
+    if (im.kind === 'banner'){
+      const lab = el('label', 'row'); const rb = el('input'); rb.type = 'radio'; rb.name = 'pick-banner'; rb.value = im.name;
+      rb.checked = (ACC && ACC.saved.banner) ? ACC.saved.banner === im.name : !bn.querySelector('input:checked');
+      rb.onchange = () => { ACC.saved.banner = im.name; saveAcc(); };
+      lab.append(rb, el('span', null, 'Use this one')); it.append(lab);
+    }
+    (im.kind === 'banner' ? bn : av).append(it);
   });
   if (!k.images.length) av.append(el('p', 'empty', 'Press Make a new set to create profile pictures and a YouTube banner for this campaign.'));
   const box = $('#kit-texts'); box.innerHTML = ''; const saved = (ACC && ACC.saved.kit) || {};
@@ -752,6 +764,26 @@ $('#add-camp').onclick = () => {
   $('#cb-file').click();
 };
 setInterval(() => { if (!$('#tab-clips').hidden) loadWatch(); }, 15000);
+
+
+function brandState(){
+  const m = $('#brand-msg'), b = $('#brand-apply');
+  if (!YTS || !YTS.connected){ m.textContent = 'Connect your channel in the Settings tab first (one-time setup).'; b.disabled = true; }
+  else if (!YTS.can_brand){ m.textContent = 'Reconnect once to allow channel edits: Settings, Disconnect, then Connect YouTube channel.'; b.disabled = true; }
+  else { m.textContent = 'Connected to ' + (YTS.channel || 'your channel') + '.'; b.disabled = false; }
+  if (YTS && YTS.channel_id) $('#pfp-link').href = 'https://studio.youtube.com/channel/' + YTS.channel_id + '/editing/images';
+}
+$('#brand-apply').onclick = async () => {
+  const b = $('#brand-apply'); b.disabled = true; b.textContent = 'Applying…';
+  const pick = document.querySelector('input[name=pick-banner]:checked');
+  try {
+    const r = await api('/api/youtube/brand', { campaign: campaign.id, banner: pick ? pick.value : null,
+      description: $('#kt-youtube_description') ? $('#kt-youtube_description').value : null,
+      keywords: $('#kt-youtube_keywords') ? $('#kt-youtube_keywords').value : null });
+    $('#brand-msg').textContent = 'Done: ' + r.updated.join(', ') + ' updated. It can take a few minutes to show on YouTube.'; toast('Channel updated');
+  } catch (e) { $('#brand-msg').textContent = e.message; }
+  b.disabled = false; b.textContent = 'Apply to my YouTube channel';
+};
 
 /* poll */
 let first = true;

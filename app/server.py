@@ -668,6 +668,23 @@ def yt_disconnect():
     return jsonify(ok=True)
 
 
+@APP.post("/api/youtube/brand")
+def yt_brand():
+    body = request.get_json(force=True) or {}
+    camp = campaign_by_id(body.get("campaign"))
+    banner = None
+    if body.get("banner"):
+        banner = KIT.KIT_DIR / camp["id"] / Path(body["banner"]).name
+        if not banner.exists():
+            return jsonify(error="That banner file is gone. Make a new set."), 400
+    try:
+        r = YT.apply_branding(banner, body.get("description"), body.get("keywords"))
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        return jsonify(error=str(e)[:300]), 400
+    return jsonify(ok=True, **r)
+
+
 @APP.post("/api/clips/<cid>/youtube")
 def yt_upload(cid):
     c = clip_by_id(cid)
