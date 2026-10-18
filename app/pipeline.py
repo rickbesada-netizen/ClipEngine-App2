@@ -120,6 +120,10 @@ def list_source(url: str, limit: int, settings: dict) -> list[dict]:
     return out
 
 
+AUTO_BROWSERS = ["firefox", "brave", "edge", "chrome", "opera", "vivaldi"]
+WORKING_BROWSER: dict = {"name": None}
+
+
 def download(url: str, settings: dict, progress) -> tuple[Path, dict]:
     from yt_dlp import YoutubeDL
 
@@ -132,19 +136,44 @@ def download(url: str, settings: dict, progress) -> tuple[Path, dict]:
             if tot:
                 progress(f"Downloading {got / tot * 100:.0f}%", got / tot * 0.3)
 
-    opts = ydl_opts(settings, {
+    extra = {
         "format": f"bv*[height<={height}][ext=mp4]+ba[ext=m4a]/bv*[height<={height}]+ba/b[height<={height}]/b",
         "merge_output_format": "mp4",
         "outtmpl": str(DL_DIR / "%(extractor_key)s-%(id)s.%(ext)s"),
         "progress_hooks": [hook],
         "overwrites": False,
-    })
-    with YoutubeDL(opts) as y:
-        info = y.extract_info(url, download=True)
-        if info.get("entries"):
-            info = info["entries"][0]
-        rd = info.get("requested_downloads") or []
-        path = Path(rd[0]["filepath"]) if rd and rd[0].get("filepath") else Path(y.prepare_filename(info)).with_suffix(".mp4")
+    }
+
+    def attempt(st):
+        with YoutubeDL(ydl_opts(st, extra)) as y:
+            inf = y.extract_info(url, download=True)
+            if inf.get("entries"):
+                inf = inf["entries"][0]
+            rd = inf.get("requested_downloads") or []
+            pth = Path(rd[0]["filepath"]) if rd and rd[0].get("filepath") else Path(y.prepare_filename(inf)).with_suffix(".mp4")
+            return inf, pth
+
+    try:
+        info, path = attempt(settings)
+    except Exception as first:  # noqa: BLE001
+        msg = str(first).lower()
+        if not ("sign in" in msg or "not a bot" in msg or "login" in msg or "cookies" in msg):
+            raise
+        # YouTube asked for a signed-in browser: try each installed browser's sign-in automatically
+        tried = {(settings.get("cookies_browser") or "none").lower()}
+        last = first
+        for b in AUTO_BROWSERS:
+            if b in tried:
+                continue
+            progress(f"YouTube wants a sign-in, trying your {b.title()} sign-in…")
+            try:
+                info, path = attempt({**settings, "cookies_browser": b, "cookies_file": ""})
+                WORKING_BROWSER["name"] = b
+                break
+            except Exception as e:  # noqa: BLE001
+                last = e
+        else:
+            raise last
     meta = {
         "id": info.get("id"), "title": info.get("title") or path.stem, "url": info.get("webpage_url") or url,
         "channel": info.get("uploader") or info.get("channel"), "duration": info.get("duration"),

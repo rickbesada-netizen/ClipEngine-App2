@@ -113,6 +113,11 @@ def process(j: dict):
         path, meta = P.local_source(src_url)
     else:
         path, meta = P.download(src_url, settings, progress)
+        wb = P.WORKING_BROWSER.get("name")
+        if wb and DB["settings"].get("cookies_browser", "none") in ("", "none"):
+            with LOCK:
+                DB["settings"]["cookies_browser"] = wb  # use it straight away next time
+            save_db()
     j["title"] = meta["title"]
     info = P.probe(path)
     if not info["w"]:
@@ -382,7 +387,9 @@ def friendly_error(e: Exception) -> str:
     s = str(e)
     low = s.lower()
     if "sign in to confirm" in low or "not a bot" in low:
-        return "YouTube wants a signed-in browser. In Settings set 'Use cookies from' to Firefox (signed in to YouTube) and retry."
+        return ("YouTube blocked the download and none of your browsers' sign-ins worked. Fix: open Firefox, sign in to YouTube, "
+                "close Firefox, then press Retry. (Chrome, Edge and Brave lock their sign-ins, so Firefox is the reliable one. "
+                "Or use a cookies.txt file in Settings.)")
     if "login" in low and "instagram" in low or "rate-limit" in low:
         return "Instagram needs you signed in. Set 'Use cookies from' to the browser where you're logged in to Instagram and retry."
     if "unsupported url" in low:
