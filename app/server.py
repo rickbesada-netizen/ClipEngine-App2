@@ -64,6 +64,12 @@ def save_db():
         tmp.replace(DB_PATH)
 
 
+def write_campaigns_text(text: str, encoding: str = "utf-8"):
+    tmp = CAMPAIGNS_PATH.with_suffix(".tmp")
+    tmp.write_text(text, encoding=encoding)
+    tmp.replace(CAMPAIGNS_PATH)
+
+
 def campaigns() -> list[dict]:
     return json.loads(CAMPAIGNS_PATH.read_text(encoding="utf-8"))
 
@@ -426,7 +432,7 @@ def save_campaigns():
     body = request.get_json(force=True)
     if not isinstance(body, list) or not body:
         return jsonify(error="Expected a list of campaigns"), 400
-    CAMPAIGNS_PATH.write_text(json.dumps(body, indent=2), encoding="utf-8")
+    write_campaigns_text(json.dumps(body, indent=2), encoding="utf-8")
     return jsonify(ok=True)
 
 
@@ -799,7 +805,7 @@ def campaign_upsert():
         lst.insert(0, c)
     else:
         lst[idx] = {**lst[idx], **c}
-    CAMPAIGNS_PATH.write_text(json.dumps(lst, indent=2), encoding="utf-8")
+    write_campaigns_text(json.dumps(lst, indent=2), encoding="utf-8")
     with LOCK:
         DB["campaign"] = c["id"]
     save_db()
@@ -812,7 +818,7 @@ def campaign_delete(cid):
     if len(lst) <= 1:
         return jsonify(error="Keep at least one campaign."), 400
     lst = [c for c in lst if c["id"] != cid]
-    CAMPAIGNS_PATH.write_text(json.dumps(lst, indent=2), encoding="utf-8")
+    write_campaigns_text(json.dumps(lst, indent=2), encoding="utf-8")
     with LOCK:
         if DB.get("campaign") == cid:
             DB["campaign"] = lst[0]["id"]

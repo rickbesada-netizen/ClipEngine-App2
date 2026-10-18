@@ -406,13 +406,15 @@ $('#pick-add').onclick = () => {
 
 /* start */
 $('#start').onclick = async () => {
-  const urls = $('#urls').value.split(/\n/).map(s => s.trim()).filter(Boolean);
+  const ticked = [...document.querySelectorAll('#pick-list input:checked')].map(c => c.value);
+  const urls = [...new Set([...$('#urls').value.split(/\n/).map(s => s.trim()).filter(Boolean), ...ticked])];
+  if (!urls.length){ toast('Tick some videos in the list, or paste links, first.'); return; }
   const settings = { clips_per_video: +$('#q-n').value || 4, min_len: +$('#q-min').value || 20, max_len: +$('#q-max').value || 45, layout: $('#q-layout').value };
   if (settings.max_len <= settings.min_len){ toast('Max seconds must be more than min seconds'); return; }
   try {
     await api('/api/settings', { settings, campaign: campaign.id });
     await api('/api/jobs', { urls, campaign: campaign.id, settings });
-    $('#urls').value = ''; toast(urls.length + ' video' + (urls.length > 1 ? 's' : '') + ' queued'); poll();
+    $('#urls').value = ''; document.querySelectorAll('#pick-list input:checked').forEach(c => c.checked = false); toast(urls.length + ' video' + (urls.length > 1 ? 's' : '') + ' queued'); poll();
   } catch (e) { toast(e.message); }
 };
 
@@ -807,7 +809,7 @@ $('#brand-apply').onclick = async () => {
 };
 
 /* poll */
-let first = true;
+let first = true, fails = 0;
 async function poll(force){
   try {
     S = await api('/api/state'); skew = Date.now() / 1000 - S.now;
@@ -816,7 +818,11 @@ async function poll(force){
       setCampaign(S.campaign || S.campaigns[0].id); bindSettings(); $('#caption-warn').hidden = S.can_caption; $('#s-ytpriv').value = S.settings.youtube_privacy || 'public'; first = false; loadYT().then(() => renderClips(true));
     }
     renderJobs(); renderClips(force === true);
-  } catch (e) { $('#jobs').innerHTML = ''; $('#jobs').append(el('p', 'empty', 'Lost contact with Clip Engine. Is its window still open?')); }
+    fails = 0;
+  } catch (e) {
+    fails++;
+    if (fails >= 3){ $('#jobs').innerHTML = ''; jobSig = ''; $('#jobs').append(el('p', 'empty', 'Lost contact with Clip Engine (' + e.message + '). Check its black window is still open; if it closed, start ClipEngine.exe again. Your clips are kept.')); }
+  }
 }
 poll(); setInterval(poll, 1500);
 })();
