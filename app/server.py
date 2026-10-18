@@ -212,9 +212,11 @@ def _channel_for(camp_id: str) -> str:
         ch = "@" + acc["handle"]
     if not ch:
         return ""
-    if ch.startswith("http"):
-        return ch.split("?")[0].rstrip("/")
-    return "https://www.youtube.com/" + (ch if ch.startswith("@") else "@" + ch)
+    m = re.search(r"youtube\.com/(channel/[\w-]+|c/[^/?#]+|user/[^/?#]+)", ch)
+    if m:
+        return "https://www.youtube.com/" + m.group(1)
+    handle = re.sub(r"^.*youtube\.com/", "", ch.split("?")[0]).strip("/").split("/")[0].lstrip("@")
+    return "https://www.youtube.com/@" + handle if handle else ""
 
 
 def open_path(target: Path):
@@ -299,9 +301,29 @@ def match_posts(camp_id: str) -> dict:
                     break
     if found:
         save_db()
+    unmatched = [it.get("title") for it in items if it.get("id") and f"https://www.youtube.com/shorts/{it['id']}" not in taken][:5]
     with LOCK:
         DB.setdefault("watch", {})[camp_id] = {"checked": time.time(), "found": found, "channel": url}
-    return {"found": found, "checked": len(items), "channel": url}
+    return {"found": found, "checked": len(items), "channel": url, "waiting": len(waiting), "unmatched": unmatched}
+
+
+@APP.post("/api/clips/move")
+def move_clips():
+    body = request.get_json(force=True) or {}
+    src, dst = body.get("from"), body.get("to")
+    if not src or not dst or src == dst:
+        return jsonify(error="Pick two different campaigns."), 400
+    camp = campaign_by_id(dst)
+    n = 0
+    with LOCK:
+        for c in DB["clips"]:
+            if c["campaign"] == src:
+                c["campaign"] = dst
+                c["caption"] = P.caption_text(c.get("hook") or "", camp)
+                c.pop("yt_batch", None); c.pop("yt_title", None)
+                n += 1
+    save_db()
+    return jsonify(ok=True, moved=n)
 
 
 @APP.post("/api/ytmatch")

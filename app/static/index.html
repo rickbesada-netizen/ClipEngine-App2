@@ -488,6 +488,24 @@ function renderClips(force){
   renderDue();
   if (sig === clipSig && !force) return; clipSig = sig;
   const box = $('#clips'); box.innerHTML = '';
+  if (!mine.length){
+    const other = {}; S.clips.forEach(c => { other[c.campaign] = (other[c.campaign] || 0) + 1; });
+    const ids = Object.keys(other);
+    if (ids.length){
+      const d = el('div', 'empty');
+      d.append(el('p', null, 'No clips for ' + campaign.name + ' yet. Clips belong to the campaign that was selected when you pressed Find clips. Yours are here:'));
+      ids.forEach(id => {
+        const cp = S.campaigns.find(x => x.id === id); const r = el('div', 'row'); r.style.marginTop = '6px';
+        r.append(el('b', null, (cp ? cp.name : id) + ': ' + other[id] + ' clip' + (other[id] > 1 ? 's' : '')));
+        const sw = el('button', 'btn', 'Switch to ' + (cp ? cp.name : id)); sw.type = 'button'; sw.onclick = () => { $('#campaign').value = id; $('#campaign').onchange({ target: $('#campaign') }); };
+        const mv = el('button', 'btn', 'Move them to ' + campaign.name); mv.type = 'button';
+        mv.onclick = () => { if (!mv.dataset.sure){ mv.dataset.sure = 1; mv.textContent = 'Click again: captions get ' + campaign.name + "'s hashtags"; return; }
+          api('/api/clips/move', { from: id, to: campaign.id }).then(r => { toast('Moved ' + r.moved + ' clips'); poll(true); }).catch(e => toast(e.message)); };
+        r.append(sw, mv); d.append(r);
+      });
+      box.append(d); return;
+    }
+  }
   if (!list.length){ box.append(el('p', 'empty', mine.length ? 'No clips in this filter.' : 'Finished clips appear here, each with a ready caption, why it was picked, and buttons to track posting and submitting.')); return; }
   list.forEach(c => box.append(clipCard(c)));
 }
@@ -755,7 +773,10 @@ $('#yt-tags-copy').onclick = () => copy($('#yt-tags').value);
 $('#yt-match').onclick = async () => {
   const b = $('#yt-match'); b.disabled = true; b.textContent = 'Checking…';
   try { const r = await api('/api/ytmatch', { campaign: campaign.id, channel: $('#yt-channel').value });
-        toast(r.found ? 'Found ' + r.found + ' new Short' + (r.found > 1 ? 's' : '') + '. Submit the links now.' : 'No new matching Shorts yet (checked ' + r.checked + ').'); poll(true); loadWatch(); }
+        if (r.found) toast('Found ' + r.found + ' new Short' + (r.found > 1 ? 's' : '') + '. Submit the links now.');
+        else if (!r.waiting) toast('This campaign has no clips waiting to be posted, so there is nothing to match. Make clips first.');
+        else toast('Checked ' + r.checked + ' Shorts on your channel. None match these clips yet' + (r.unmatched && r.unmatched.length ? ' (found: "' + r.unmatched[0] + '")' : '') + '. Titles must come from an upload batch.');
+        poll(true); loadWatch(); }
   catch (e) { toast(e.message); }
   b.disabled = false; b.textContent = 'Check now';
 };
