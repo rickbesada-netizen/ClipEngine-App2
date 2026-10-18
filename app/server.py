@@ -219,6 +219,11 @@ def _channel_for(camp_id: str) -> str:
     return "https://www.youtube.com/@" + handle if handle else ""
 
 
+def _norm_channel(u: str) -> str:
+    m = re.search(r"youtube\.com/(@[^/?#]+|channel/[\w-]+|c/[^/?#]+|user/[^/?#]+)", u or "")
+    return m.group(1).lower().lstrip("@").replace("channel/", "") if m else (u or "").lower().strip("@/ ")
+
+
 def open_path(target: Path):
     if os.name == "nt":
         if target.is_file():
@@ -274,6 +279,10 @@ def match_posts(camp_id: str) -> dict:
     url = _channel_for(camp_id)
     if not url:
         return {"error": "Add your YouTube channel (handle or link) first."}
+    camp = campaign_by_id(camp_id)
+    srcs = {_norm_channel(u) for u in camp.get("sources", []) if "youtube.com" in u}
+    if _norm_channel(url) in srcs:
+        return {"error": f"That's {camp['name']}'s own channel, the one you clip FROM. Put the channel YOU upload your clips to here (your clip channel, e.g. @{camp.get('handle_base') or 'yourname'}clipsdaily)."}
     try:
         items = P.list_source(url + "/shorts", 40, DB["settings"])
     except Exception as e:  # noqa: BLE001
