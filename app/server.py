@@ -51,12 +51,21 @@ DEFAULT_SETTINGS = {
 
 
 def load_db() -> dict:
-    if DB_PATH.exists():
-        try:
-            return json.loads(DB_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {"jobs": [], "clips": [], "settings": DEFAULT_SETTINGS, "campaign": None}
+    for cand in (DB_PATH, DB_PATH.with_suffix(".tmp")):
+        if cand.exists():
+            try:
+                d = json.loads(cand.read_text(encoding="utf-8"))
+                if isinstance(d, dict):
+                    d.setdefault("clips", []); d.setdefault("jobs", [])
+                    return d
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+                # never overwrite a save file we couldn't read: keep a copy
+                try:
+                    cand.replace(cand.with_name(f"db-unreadable-{int(time.time())}.json"))
+                except OSError:
+                    pass
+    return {"jobs": [], "clips": [], "settings": dict(DEFAULT_SETTINGS), "campaign": None}
 
 
 DB = load_db()
@@ -82,7 +91,23 @@ def write_campaigns_text(text: str, encoding: str = "utf-8"):
 
 
 def campaigns() -> list[dict]:
-    return json.loads(CAMPAIGNS_PATH.read_text(encoding="utf-8"))
+    try:
+        lst = json.loads(CAMPAIGNS_PATH.read_text(encoding="utf-8"))
+        if isinstance(lst, list) and lst:
+            return lst
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+    # damaged or missing: fall back to the built-in presets
+    builtin = P.APP_DIR / "campaigns.json"
+    lst = json.loads(builtin.read_text(encoding="utf-8"))
+    try:
+        if CAMPAIGNS_PATH != builtin:
+            if CAMPAIGNS_PATH.exists():
+                CAMPAIGNS_PATH.replace(CAMPAIGNS_PATH.with_name(f"campaigns-unreadable-{int(time.time())}.json"))
+            CAMPAIGNS_PATH.write_text(json.dumps(lst, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+    return lst
 
 
 def campaign_by_id(cid: str) -> dict:
@@ -144,6 +169,42 @@ def organise_clips():
     if changed:
         save_db()
 
+
+
+def recover_clips():
+    """Adds clip videos found in the clips folders that the save file doesn't know about (e.g. after a lost save)."""
+    known = {str(Path(c["file"])).lower() for c in DB["clips"]}
+    by_name = {campaign_folder_name(c["id"]).lower(): c["id"] for c in campaigns()}
+    added = 0
+    for f in sorted(P.CLIP_DIR.rglob("*.mp4")):
+        rel = f.relative_to(P.CLIP_DIR)
+        if "YouTube uploads" in rel.parts or str(rel).lower() in known:
+            continue
+        top = rel.parts[0].lower() if len(rel.parts) > 1 else ""
+        camp = by_name.get(top)
+        if not camp:
+            low = f.stem.lower()
+            camp = next((cid for cid in by_name.values() if low.startswith(cid + "-")), None) or campaigns()[0]["id"]
+        cid = uuid.uuid4().hex[:8]
+        hook = re.sub(r"-[0-9a-f]{6,8}$", "", f.stem)
+        hook = re.sub(r"[-_]+", " ", hook).strip() if "/" not in str(rel).replace("\\", "/") else f.stem
+        c = {"id": cid, "job": None, "campaign": camp, "file": str(rel).replace("\\", "/"), "thumb": f"{cid}.jpg",
+             "source_title": "(recovered clip)", "source_url": "", "source_path": "", "start": 0.0, "end": P.probe(f)["duration"] or 0.0,
+             "score": 0, "reasons": ["recovered from your clips folder"], "text": "", "hook": hook,
+             "caption": P.caption_text(hook, campaign_by_id(camp)), "status": "ready", "posts": [], "created": f.stat().st_mtime,
+             "layout": "native", "src_w": 1080, "src_h": 1920}
+        try:
+            subprocess.run([P.FFMPEG, "-y", "-ss", "1.0", "-i", str(f), "-frames:v", "1", "-vf", "scale=360:-2", str(thumb_path(c))],
+                           capture_output=True, creationflags=P._NO_WINDOW, timeout=60)
+        except Exception:  # noqa: BLE001
+            pass
+        DB["clips"].append(c)
+        added += 1
+    if added:
+        DB["clips"].sort(key=lambda c: c.get("created", 0), reverse=True)
+        save_db()
+        print(f"Recovered {added} clip(s) from the clips folder", flush=True)
+    return added
 
 # ---------------------------------------------------------------- worker
 QUEUE: list[str] = []
@@ -483,10 +544,15 @@ def thumb_file(name):
 
 @APP.get("/api/state")
 def state():
-    with LOCK:
-        clips = [{k: v for k, v in c.items() if k != "words"} for c in DB["clips"]]
-        return jsonify({"jobs": DB["jobs"][-40:], "clips": clips, "settings": DB["settings"], "campaign": DB.get("campaign"),
-                        "campaigns": campaigns(), "can_caption": P.CAN_CAPTION, "now": time.time()})
+    try:
+        with LOCK:
+            clips = [{k: v for k, v in c.items() if k != "words"} for c in DB["clips"]]
+            return jsonify({"jobs": DB["jobs"][-40:], "clips": clips, "settings": DB["settings"], "campaign": DB.get("campaign"),
+                            "campaigns": campaigns(), "can_caption": P.CAN_CAPTION, "now": time.time(),
+                            "data_dir": str(P.DATA)})
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        return jsonify(error=f"Clip Engine hit a problem loading your data: {str(e)[:200]}"), 500
 
 
 @APP.get("/api/ollama")
@@ -1087,6 +1153,11 @@ if __name__ == "__main__":
     while not _port_free(port) and port < PORT + 10:
         port += 1
     organise_clips()
+    try:
+        if recover_clips():
+            organise_clips()
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=watcher, daemon=True).start()
     url = f"http://127.0.0.1:{port}"

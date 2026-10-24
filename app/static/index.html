@@ -406,6 +406,7 @@ $('#pick-add').onclick = () => {
 
 /* start */
 $('#start').onclick = async () => {
+  if (!campaign){ toast("Clip Engine hasn't loaded your campaigns yet. See the message at the top."); return; }
   const ticked = [...document.querySelectorAll('#pick-list input:checked')].map(c => c.value);
   const urls = [...new Set([...$('#urls').value.split(/\n/).map(s => s.trim()).filter(Boolean), ...ticked])];
   if (!urls.length){ toast('Tick some videos in the list, or paste links, first.'); return; }
@@ -813,6 +814,7 @@ let first = true, fails = 0;
 async function poll(force){
   try {
     S = await api('/api/state'); skew = Date.now() / 1000 - S.now;
+    const be = $('#boot-error'); if (be) be.remove();
     if (first){
       $('#campaign').innerHTML = S.campaigns.map(c => `<option value="${c.id}">${c.name.replace(/</g, '')}</option>`).join('');
       setCampaign(S.campaign || S.campaigns[0].id); bindSettings(); $('#caption-warn').hidden = S.can_caption; $('#s-ytpriv').value = S.settings.youtube_privacy || 'public'; first = false; loadYT().then(() => renderClips(true));
@@ -821,6 +823,11 @@ async function poll(force){
     fails = 0;
   } catch (e) {
     fails++;
+    if (first){
+      let b = $('#boot-error');
+      if (!b){ b = el('p', 'notice'); b.id = 'boot-error'; b.style.margin = '0 0 14px'; document.querySelector('main').prepend(b); }
+      b.textContent = "Can't load your Clip Engine data: " + e.message + '. Close every ClipEngine in Task Manager (Ctrl+Shift+Esc), then open ClipEngine.exe again from the folder that holds your "ClipEngine data" folder.';
+    }
     if (fails >= 3){ $('#jobs').innerHTML = ''; jobSig = ''; $('#jobs').append(el('p', 'empty', 'Lost contact with Clip Engine (' + e.message + '). Check the Clip Engine icon is still in the system tray (bottom-right, by the clock). If it isn't, open ClipEngine.exe again. Your clips are kept.')); }
   }
 }
