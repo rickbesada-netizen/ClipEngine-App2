@@ -35,37 +35,45 @@ jobs:
 
       - name: Build ClipEngine.exe
         run: >
-          pyinstaller --noconfirm --clean --onefile --console --name ClipEngine
+          pyinstaller --noconfirm --clean --onefile --noconsole --name ClipEngine
+          --icon assets/ClipEngine.ico --version-file assets/version.txt
           --paths app --hidden-import pipeline
-          --add-data "app/static;static" --add-data "app/fonts;fonts" --add-data "app/campaigns.json;."
+          --add-data "app/static;static" --add-data "app/fonts;fonts" --add-data "app/campaigns.json;." --add-data "app/tray.png;."
           --add-binary "denobin/deno.exe;."
           --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime --collect-all tokenizers
           --collect-all av --collect-all imageio_ffmpeg --collect-all yt_dlp --collect-all yt_dlp_ejs
           --collect-data cv2 --collect-submodules flask --collect-data googleapiclient --hidden-import youtube
           --hidden-import campaign_import --hidden-import kit --collect-all rapidocr_onnxruntime
-          --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-data docx
+          --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-data docx --collect-submodules pystray
           app/server.py
 
       - name: Test the exe
         shell: pwsh
         run: |
-          dist\ClipEngine.exe --selftest
-          if ($LASTEXITCODE -ne 0) { throw "Self-test failed" }
+          $st = Start-Process dist\ClipEngine.exe -ArgumentList "--selftest" -Wait -PassThru
+          Get-Content "dist\ClipEngine data\clip-engine.log" -ErrorAction SilentlyContinue
+          if ($st.ExitCode -ne 0) { throw "Self-test failed (exit $($st.ExitCode))" }
           $env:CLIP_ENGINE_NO_BROWSER = "1"
+          $env:CLIP_ENGINE_NO_TRAY = "1"
           $p = Start-Process dist\ClipEngine.exe -PassThru
           $ok = $false
           for ($i = 0; $i -lt 60; $i++) {
             Start-Sleep -Seconds 2
             try { $r = Invoke-WebRequest http://127.0.0.1:5050/api/state -UseBasicParsing; if ($r.StatusCode -eq 200) { $ok = $true; break } } catch {}
           }
+          # a second launch must not start another copy
+          $p2 = Start-Process dist\ClipEngine.exe -PassThru -Wait
           Stop-Process -Id $p.Id -Force
+          Get-Content "dist\ClipEngine data\clip-engine.log" -Tail 20 -ErrorAction SilentlyContinue
           if (-not $ok) { throw "App did not start" }
-          Write-Host "App started and answered."
+          if ($p2.ExitCode -ne 0) { throw "Second launch did not hand over to the running copy" }
+          Remove-Item -Recurse -Force "dist\ClipEngine data"
+          Write-Host "App started, answered, and a second launch handed over."
 
       - name: Publish download
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
+          tag_name: v1.1.${{ github.run_number }}
           name: Clip Engine for Windows (build ${{ github.run_number }})
           make_latest: true
           files: dist/ClipEngine.exe
@@ -75,6 +83,6 @@ jobs:
             - Windows may say "Windows protected your PC" because the app isn't code-signed. Click **More info** then **Run anyway**.
             - Put the exe in its own folder (for example Documents\Clip Engine). Your clips are saved in a "ClipEngine data" folder next to it.
             - The first transcription downloads a speech model (about 150 MB, once).
-            - Starting takes 10–20 seconds while it unpacks. Keep the black window open while you work.
+            - Starting takes 10–20 seconds while it unpacks. Clip Engine then sits in the system tray (bottom-right, by the clock): click its icon to open it, right-click to quit.
 
             Built automatically from the latest code. A fresh build is made every week so the video downloader keeps working.

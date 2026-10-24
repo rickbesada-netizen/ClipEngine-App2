@@ -821,7 +821,7 @@ async function poll(force){
     fails = 0;
   } catch (e) {
     fails++;
-    if (fails >= 3){ $('#jobs').innerHTML = ''; jobSig = ''; $('#jobs').append(el('p', 'empty', 'Lost contact with Clip Engine (' + e.message + '). Check its black window is still open; if it closed, start ClipEngine.exe again. Your clips are kept.')); }
+    if (fails >= 3){ $('#jobs').innerHTML = ''; jobSig = ''; $('#jobs').append(el('p', 'empty', 'Lost contact with Clip Engine (' + e.message + '). Check the Clip Engine icon is still in the system tray (bottom-right, by the clock). If it isn't, open ClipEngine.exe again. Your clips are kept.')); }
   }
 }
 poll(); setInterval(poll, 1500);

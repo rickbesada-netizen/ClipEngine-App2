@@ -6,7 +6,7 @@ START
 2. Double-click START.bat.
    - First run installs everything (Python if missing, then the app). If it installs Python,
      close the window and double-click START.bat again.
-   - Your browser opens at http://127.0.0.1:5050. Keep the black window open while you work.
+   - Your browser opens at http://127.0.0.1:5050. Keep the black window open while you work. (ClipEngine.exe has no window: it sits in the system tray instead.)
 
 USE
 1. Pick the campaign at the top (TJR is set up).

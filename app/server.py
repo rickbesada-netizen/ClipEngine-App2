@@ -1,6 +1,16 @@
 """Clip Engine local server. Run START.bat (Windows) or `python app/server.py`."""
 from __future__ import annotations
 
+import sys as _sys
+from pathlib import Path as _Path
+
+if getattr(_sys, "frozen", False) and (_sys.stdout is None or _sys.stderr is None):
+    # Windowed ClipEngine.exe has no console: send output to a log file next to the data
+    _log_dir = _Path(_sys.executable).resolve().parent / "ClipEngine data"
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _log = open(_log_dir / "clip-engine.log", "a", encoding="utf-8", buffering=1)
+    _sys.stdout = _sys.stderr = _log
+
 import json
 import os
 import re
@@ -958,7 +968,15 @@ def selftest() -> int:
         "screen files": (P.APP_DIR / "static" / "index.html").exists(),
         "caption font": (P.FONT_DIR / "Poppins-Bold.ttf").exists(),
         "campaigns": bool(campaigns()),
+        "tray icon image": (P.APP_DIR / "tray.png").exists(),
     }
+    if os.name == "nt":
+        try:
+            import pystray  # noqa: F401
+            checks["system tray"] = True
+        except Exception as e:  # noqa: BLE001
+            print("tray import error:", e)
+            checks["system tray"] = False
     try:
         from PIL import Image
         import pypdfium2  # noqa: F401
@@ -991,14 +1009,103 @@ def selftest() -> int:
     return 0 if ok else 1
 
 
+def _already_running(port: int) -> bool:
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=1.5) as r:
+            return r.status == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _port_free(port: int) -> bool:
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sk:
+        return sk.connect_ex(("127.0.0.1", port)) != 0
+
+
+def _run_tray(url: str, stop) -> bool:
+    """Shows Clip Engine in the Windows system tray. Returns False if a tray isn't available."""
+    if os.environ.get("CLIP_ENGINE_NO_TRAY"):
+        return False
+    try:
+        import pystray
+        from PIL import Image
+        img = Image.open(P.APP_DIR / "tray.png")
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+        return False
+
+    def open_app(icon=None, item=None):
+        webbrowser.open(url)
+
+    def open_folder_(icon=None, item=None):
+        try:
+            open_path(P.CLIP_DIR)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+
+    def quit_app(icon, item=None):
+        icon.visible = False
+        icon.stop()
+        stop()
+
+    menu = pystray.Menu(pystray.MenuItem("Open Clip Engine", open_app, default=True),
+                        pystray.MenuItem("Open clips folder", open_folder_),
+                        pystray.Menu.SEPARATOR,
+                        pystray.MenuItem("Quit Clip Engine", quit_app))
+    icon = pystray.Icon("ClipEngine", img, "Clip Engine", menu)
+
+    def ready(ic):
+        ic.visible = True
+        try:
+            ic.notify("Clip Engine is running. Click this icon to open it, right-click to quit.", "Clip Engine")
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        icon.run(setup=ready)
+        return True
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+        return False
+
+
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
-        sys.exit(selftest())
+        code = selftest()
+        try:
+            (P.DATA / "selftest.txt").write_text("PASSED" if code == 0 else "FAILED", encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            pass
+        sys.exit(code)
+    port = PORT
+    if _already_running(port):
+        # Clip Engine is already open: just show it
+        if not os.environ.get("CLIP_ENGINE_NO_BROWSER"):
+            webbrowser.open(f"http://127.0.0.1:{port}")
+        sys.exit(0)
+    while not _port_free(port) and port < PORT + 10:
+        port += 1
     organise_clips()
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=watcher, daemon=True).start()
-    url = f"http://127.0.0.1:{PORT}"
-    print(f"\n  Clip Engine is running at {url}\n  Keep this window open while you use it.\n")
+    url = f"http://127.0.0.1:{port}"
+    from werkzeug.serving import make_server
+    srv = make_server("127.0.0.1", port, APP, threaded=True)
+    print(f"Clip Engine is running at {url}", flush=True)
     if not os.environ.get("CLIP_ENGINE_NO_BROWSER"):
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
-    APP.run(host="127.0.0.1", port=PORT, debug=False, threaded=True)
+
+    def stop():
+        threading.Thread(target=srv.shutdown, daemon=True).start()
+        threading.Timer(1.5, lambda: os._exit(0)).start()
+
+    if getattr(sys, "frozen", False):
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        if not _run_tray(url, stop):
+            while True:  # no tray available: keep serving
+                time.sleep(3600)
+        os._exit(0)
+    else:
+        print("  Keep this window open while you use it. Press Ctrl+C to stop.", flush=True)
+        srv.serve_forever()
