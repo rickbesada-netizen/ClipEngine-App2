@@ -13,7 +13,7 @@ Free app that runs on your Windows PC and turns streams and long videos into ver
 - Tracks posted links and counts down the submission deadline
 
 ## Download (Windows)
-**[Download ClipEngine.exe](https://github.com/rickbesada-netizen/clip-engine/releases/latest/download/ClipEngine.exe)**, put it in its own folder (for example Documents\Clip Engine) and double-click it. Your browser opens Clip Engine.
+**[Download ClipEngine.exe](https://github.com/rickbesada-netizen/ClipEngine-App/releases/latest/download/ClipEngine.exe)**, put it in its own folder (for example Documents\Clip Engine) and double-click it. Your browser opens Clip Engine.
 
 - Windows may say "Windows protected your PC" because the app isn't code-signed: click **More info**, then **Run anyway**.
 - Clips are saved in a `ClipEngine data` folder next to the exe.
