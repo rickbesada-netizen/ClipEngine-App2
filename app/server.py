@@ -42,7 +42,7 @@ if getattr(sys, "frozen", False):
         CAMPAIGNS_PATH.write_text((P.APP_DIR / "campaigns.json").read_text(encoding="utf-8"), encoding="utf-8")
 LOCK = threading.RLock()
 PORT = int(os.environ.get("CLIP_ENGINE_PORT", "5050"))
-APP_VERSION = "1.2.3"
+APP_VERSION = "1.2.4"
 
 DEFAULT_SETTINGS = {
     "clips_per_video": 4, "min_len": 20, "max_len": 45, "layout": "auto", "captions": True,
@@ -1124,8 +1124,14 @@ def selftest() -> int:
         "caption font": (P.FONT_DIR / "Poppins-Bold.ttf").exists(),
         "campaigns": bool(campaigns()),
         "tray icon image": (P.APP_DIR / "tray.png").exists(),
-        "google drive download": __import__("importlib").util.find_spec("gdown") is not None,
     }
+    try:
+        import gdown  # noqa: F401
+        from gdown import download, download_folder  # noqa: F401
+        checks["google drive download"] = True
+    except Exception as e:  # noqa: BLE001
+        print("gdown import error:", e)
+        checks["google drive download"] = False
     if os.name == "nt":
         try:
             import pystray  # noqa: F401
