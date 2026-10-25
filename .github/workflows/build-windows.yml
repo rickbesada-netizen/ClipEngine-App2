@@ -21,6 +21,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Check the app page has no script errors
+        shell: pwsh
+        run: |
+          $html = Get-Content app/static/index.html -Raw
+          $m = [regex]::Matches($html, '(?s)<script>(.*?)</script>')
+          Set-Content page-check.js $m[$m.Count - 1].Groups[1].Value
+          node --check page-check.js
+          if ($LASTEXITCODE -ne 0) { throw "The app page script has a syntax error" }
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

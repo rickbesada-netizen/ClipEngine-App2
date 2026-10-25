@@ -605,6 +605,29 @@ def list_src():
         return jsonify(error=friendly_error(e)), 400
 
 
+@APP.post("/api/upload")
+def upload_video():
+    """Receives a video dragged into the page and saves it under ClipEngine data/imports."""
+    name = Path(request.args.get("name") or "video.mp4").name
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", name).strip() or "video.mp4"
+    dest_dir = P.DATA / "imports"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / name
+    stem, suf, k = dest.stem, dest.suffix, 2
+    while dest.exists():
+        dest = dest_dir / f"{stem} ({k}){suf}"; k += 1
+    with open(dest, "wb") as fh:
+        while True:
+            chunk = request.stream.read(4 * 1024 * 1024)
+            if not chunk:
+                break
+            fh.write(chunk)
+    if dest.stat().st_size == 0:
+        dest.unlink(missing_ok=True)
+        return jsonify(error="That file was empty."), 400
+    return jsonify(path=str(dest))
+
+
 @APP.post("/api/pickfiles")
 def pick_files():
     """Opens the normal Windows 'choose files' box on this PC and returns the chosen video paths."""
