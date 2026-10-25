@@ -256,15 +256,27 @@ def process(j: dict):
         windows = P.find_windows(dur, loud, heat, max(6, n * 4), max_len + 20)
         progress(f"Long video: transcribing the {len(windows)} most promising parts", 0.3)
     segs = P.transcribe(wav, settings["whisper_model"], windows, progress, cancel)
-    if not segs:
-        raise RuntimeError("No speech found in this video.")
+    spoken = sum(len(s_["words"]) or len(s_["text"].split()) for s_ in segs)
     progress("Finding the best moments", 0.72)
-    cands = P.score_candidates(segs, loud, heat, min_len, max_len, camp.get("keywords", []))
-    if settings.get("use_ollama") and settings.get("ollama_model"):
-        progress("Asking the local AI to rate moments", 0.74)
-        top = P.pick(cands, n * 3, gap=2)
-        cands = P.ollama_rank(top, settings["ollama_model"], camp.get("look_for_short", ""))
-    chosen = P.pick(cands, n)
+    if dur and dur <= max_len + 3:
+        # short source (e.g. a supplied trailer or gameplay clip): use the whole thing
+        chosen = [{"start": 0.0, "end": float(dur), "text": " ".join(s_["text"] for s_ in segs), "score": 0,
+                   "reasons": ["whole video (short source)"]}]
+    elif not segs or spoken < dur * 0.4:
+        # little or no talking (gameplay, trailers): go by loudness and rewatch data instead of speech
+        length = max(min_len, min(max_len, (min_len + max_len) / 2))
+        chosen = P.action_windows(dur, loud, heat, n, length)
+        for c_ in chosen:
+            c_["text"] = " ".join(s_["text"] for s_ in segs if s_["end"] > c_["start"] and s_["start"] < c_["end"])
+            if not segs:
+                c_["reasons"] = c_["reasons"] + ["no talking in this video"]
+    else:
+        cands = P.score_candidates(segs, loud, heat, min_len, max_len, camp.get("keywords", []))
+        if settings.get("use_ollama") and settings.get("ollama_model"):
+            progress("Asking the local AI to rate moments", 0.74)
+            top = P.pick(cands, n * 3, gap=2)
+            cands = P.ollama_rank(top, settings["ollama_model"], camp.get("look_for_short", ""))
+        chosen = P.pick(cands, n)
     if not chosen:
         raise RuntimeError(f"No complete moments between {min_len:g} and {max_len:g} seconds. Try a wider length range.")
     words = [w for s in segs for w in s["words"]]
@@ -275,7 +287,10 @@ def process(j: dict):
         # trim to word boundaries with a little air
         c["start"] = max(0.0, c["start"] - 0.15)
         c["end"] = min(dur or c["end"] + 0.3, c["end"] + 0.35)
-        hook = c.get("ai_title") or P.hook_line(c["text"], used_hooks)
+        hook = c.get("ai_title") or (P.hook_line(c["text"], used_hooks) if c["text"].strip() else "")
+        if not hook or hook in used_hooks:
+            base = P.title_hook(meta["title"]) or camp["name"]
+            hook = base if base not in used_hooks else f"{base} part {k + 1}"
         used_hooks.add(hook)
         cid = uuid.uuid4().hex[:8]
         name = new_clip_relpath(camp["id"], hook)
@@ -587,6 +602,21 @@ def list_src():
         return jsonify(items=P.list_source(body["url"], int(body.get("limit", 15)), DB["settings"]))
     except Exception as e:  # noqa: BLE001
         return jsonify(error=friendly_error(e)), 400
+
+
+@APP.post("/api/pickfiles")
+def pick_files():
+    """Opens the normal Windows 'choose files' box on this PC and returns the chosen video paths."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk(); root.withdraw(); root.attributes("-topmost", True)
+        paths = filedialog.askopenfilenames(parent=root, title="Choose video files for Clip Engine",
+                                            filetypes=[("Videos", "*.mp4 *.mov *.mkv *.webm *.avi *.m4v"), ("All files", "*.*")])
+        root.destroy()
+    except Exception as e:  # noqa: BLE001
+        return jsonify(error=f"Couldn't open the file chooser ({str(e)[:120]}). Paste the file paths instead."), 500
+    return jsonify(paths=list(paths))
 
 
 @APP.post("/api/jobs")

@@ -298,6 +298,34 @@ def find_windows(dur: float, loud: np.ndarray, heat: np.ndarray | None, k: int, 
     return sorted(chosen)
 
 
+def action_windows(dur: float, loud: np.ndarray, heat: np.ndarray | None, n: int, length: float) -> list[dict]:
+    """For footage with little talking (gameplay, trailers): pick the loudest / most rewatched stretches."""
+    nsec = len(loud)
+    sc = np.clip(loud, -2, 3)
+    if heat is not None and len(heat):
+        sc = 0.5 * sc + 2.5 * np.interp(np.arange(nsec), np.arange(len(heat)), heat)
+    ker = max(1, int(length))
+    sm = np.convolve(sc, np.ones(ker) / ker, mode="same")
+    out: list[dict] = []
+    for i in np.argsort(-sm):
+        a = max(0.0, min(dur - length, i - length * 0.55))
+        b = min(dur, a + length)
+        if all(b + 2 <= x["start"] or a >= x["end"] + 2 for x in out):
+            out.append({"start": float(a), "end": float(b), "text": "", "score": round(float(sm[i]), 2),
+                        "reasons": ["loudest / most action"]})
+        if len(out) >= n:
+            break
+    return sorted(out, key=lambda c: c["start"])
+
+
+def title_hook(title: str) -> str:
+    t = re.sub(r"\.(mp4|mov|mkv|webm|avi)$", "", title or "", flags=re.I)
+    t = re.sub(r"[-_]+\d{2,4}$", "", t)
+    t = re.sub(r"[_]+", " ", t)
+    t = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", t)
+    return re.sub(r"\s+", " ", t).strip()[:60]
+
+
 def score_candidates(segs: list[dict], loud: np.ndarray, heat: np.ndarray | None, min_len: float, max_len: float, keywords: list[str]) -> list[dict]:
     kw = [k.strip().lower() for k in keywords if k.strip()]
     cands = []
