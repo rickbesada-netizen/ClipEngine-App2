@@ -53,7 +53,7 @@ jobs:
           --collect-all av --collect-all imageio_ffmpeg --collect-all yt_dlp --collect-all yt_dlp_ejs
           --collect-data cv2 --collect-submodules flask --collect-data googleapiclient --hidden-import youtube
           --hidden-import campaign_import --hidden-import kit --collect-all rapidocr_onnxruntime
-          --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-data docx --collect-submodules pystray
+          --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-data docx --collect-submodules pystray --collect-submodules gdown
           app/server.py
 
       - name: Test the exe

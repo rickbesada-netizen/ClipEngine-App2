@@ -183,6 +183,76 @@ def download(url: str, settings: dict, progress) -> tuple[Path, dict]:
     return path, meta
 
 
+VIDEO_EXT = (".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi")
+DRIVE_RX = re.compile(r"(drive|docs)\.google\.com/", re.I)
+
+
+def drive_import(url: str, dest: Path, progress, cancel) -> list[Path]:
+    """Downloads the videos from a shared Google Drive folder or file link into dest."""
+    import gdown
+
+    dest.mkdir(parents=True, exist_ok=True)
+    got: list[Path] = []
+
+    def cb_for(name, i, n):
+        def cb(done, total):
+            if cancel():
+                raise Cancelled()
+            if total:
+                progress(f"Downloading from Google Drive: {name} ({i}/{n}) {done / total * 100:.0f}%", 0.9 * ((i - 1) + done / total) / n)
+        return cb
+
+    try:
+        if "/folders/" in url:
+            files = gdown.download_folder(url=url, output=str(dest), skip_download=True, quiet=True, use_cookies=False)
+            vids = [f for f in (files or []) if str(f.path).lower().endswith(VIDEO_EXT)]
+            if not vids:
+                raise RuntimeError("That Google Drive folder has no video files in it (or they're inside sub-folders it couldn't open).")
+            for i, f in enumerate(vids, 1):
+                if cancel():
+                    raise Cancelled()
+                lp = Path(f.local_path)
+                lp.parent.mkdir(parents=True, exist_ok=True)
+                if not (lp.exists() and lp.stat().st_size > 0):
+                    gdown.download(id=f.id, output=str(lp), quiet=True, use_cookies=False, resume=True,
+                                   progress=cb_for(lp.name, i, len(vids)))
+                got.append(lp)
+        else:
+            out = gdown.download(url=url, output=str(dest) + os.sep, quiet=True, use_cookies=False, fuzzy=True,
+                                 progress=cb_for("file", 1, 1))
+            if out:
+                got.append(Path(out))
+    except Cancelled:
+        raise
+    except Exception as e:  # noqa: BLE001
+        msg = str(e)
+        if "50 files" in msg or "MaximumLimit" in type(e).__name__:
+            raise RuntimeError("That Drive folder has more than 50 files. Open it in Drive, pick the videos, press Download, then drag the zip into Clip Engine.") from e
+        raise RuntimeError("Couldn't download from that Google Drive link. It's probably not shared publicly. Fix: open it in Google Drive, "
+                           "select the videos, press Download, then drag the downloaded zip or videos into Clip Engine. (" + msg[:120] + ")") from e
+    return [g for g in got if g.exists() and g.stat().st_size > 0]
+
+
+def extract_videos_from_zip(zpath: Path, dest: Path) -> list[Path]:
+    import zipfile
+
+    out: list[Path] = []
+    dest.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zpath) as z:
+        for info in z.infolist():
+            name = Path(info.filename).name
+            if info.is_dir() or not name.lower().endswith(VIDEO_EXT) or name.startswith("._"):
+                continue
+            target = dest / name
+            k = 2
+            while target.exists():
+                target = dest / f"{Path(name).stem} ({k}){Path(name).suffix}"; k += 1
+            with z.open(info) as src, open(target, "wb") as fh:
+                shutil.copyfileobj(src, fh, 4 * 1024 * 1024)
+            out.append(target)
+    return out
+
+
 def local_source(path: str) -> tuple[Path, dict]:
     p = Path(path.strip().strip('"'))
     if not p.exists():

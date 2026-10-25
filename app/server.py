@@ -42,7 +42,7 @@ if getattr(sys, "frozen", False):
         CAMPAIGNS_PATH.write_text((P.APP_DIR / "campaigns.json").read_text(encoding="utf-8"), encoding="utf-8")
 LOCK = threading.RLock()
 PORT = int(os.environ.get("CLIP_ENGINE_PORT", "5050"))
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.2.3"
 
 DEFAULT_SETTINGS = {
     "clips_per_video": 4, "min_len": 20, "max_len": 45, "layout": "auto", "captions": True,
@@ -231,6 +231,21 @@ def process(j: dict):
 
     src_url = j["url"]
     progress("Starting", 0.01)
+    if P.DRIVE_RX.search(src_url):
+        dest = P.DATA / "imports" / campaign_folder_name(camp["id"])
+        vids = P.drive_import(src_url, dest, progress, cancel)
+        if not vids:
+            raise RuntimeError("No videos were downloaded from that Google Drive link.")
+        with LOCK:
+            for v in vids:
+                nj = {"id": uuid.uuid4().hex[:8], "url": str(v), "title": v.name, "campaign": j["campaign"],
+                      "settings": j.get("settings", {}), "status": "queued", "progress": 0, "message": "Waiting", "created": time.time()}
+                DB["jobs"].append(nj)
+                QUEUE.append(nj["id"])
+        j["title"] = f"Google Drive: {len(vids)} video{'s' if len(vids) != 1 else ''}"
+        progress(f"Downloaded {len(vids)} video{'s' if len(vids) != 1 else ''} to ClipEngine data\\imports\\{dest.name}. Clipping them now.", 1.0)
+        WAKE.set()
+        return
     if re.match(r"^[a-zA-Z]:\\|^/|^\\\\", src_url) and not src_url.startswith("http"):
         path, meta = P.local_source(src_url)
     else:
@@ -615,6 +630,8 @@ def upload_video():
     name = Path(request.args.get("name") or "video.mp4").name
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", name).strip() or "video.mp4"
     dest_dir = P.DATA / "imports"
+    if request.args.get("campaign"):
+        dest_dir = dest_dir / campaign_folder_name(request.args["campaign"])
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / name
     stem, suf, k = dest.stem, dest.suffix, 2
@@ -629,7 +646,17 @@ def upload_video():
     if dest.stat().st_size == 0:
         dest.unlink(missing_ok=True)
         return jsonify(error="That file was empty."), 400
-    return jsonify(path=str(dest))
+    if dest.suffix.lower() == ".zip":
+        try:
+            vids = P.extract_videos_from_zip(dest, dest_dir / dest.stem)
+        except Exception as e:  # noqa: BLE001
+            return jsonify(error=f"Couldn't open that zip: {str(e)[:150]}"), 400
+        finally:
+            dest.unlink(missing_ok=True)
+        if not vids:
+            return jsonify(error="That zip has no video files in it."), 400
+        return jsonify(paths=[str(v) for v in vids])
+    return jsonify(path=str(dest), paths=[str(dest)])
 
 
 @APP.post("/api/pickfiles")
@@ -653,10 +680,10 @@ def add_jobs():
     urls = [u.strip() for u in body.get("urls", []) if u.strip()]
     if not urls:
         return jsonify(error="Add at least one link or file path."), 400
-    share = [u for u in urls if re.search(r"frame\.io|drive\.google|dropbox\.com|wetransfer|mega\.nz|onedrive|sharepoint|box\.com", u, re.I)]
+    share = [u for u in urls if re.search(r"frame\.io|dropbox\.com|wetransfer|mega\.nz|onedrive|sharepoint|box\.com", u, re.I)]
     if share:
-        return jsonify(error="That's a download page (Frame.io, Google Drive, Dropbox…), not a video. Download the files to your PC first, "
-                             "then press 'Choose video files on this PC' and pick them."), 400
+        return jsonify(error="That's a download page (Frame.io, Dropbox…), not a video. Download the files to your PC first, "
+                             "then drag them (or the zip) into Clip Engine. Google Drive links work directly."), 400
     made = []
     with LOCK:
         for u in urls:
@@ -1097,6 +1124,7 @@ def selftest() -> int:
         "caption font": (P.FONT_DIR / "Poppins-Bold.ttf").exists(),
         "campaigns": bool(campaigns()),
         "tray icon image": (P.APP_DIR / "tray.png").exists(),
+        "google drive download": __import__("importlib").util.find_spec("gdown") is not None,
     }
     if os.name == "nt":
         try:
