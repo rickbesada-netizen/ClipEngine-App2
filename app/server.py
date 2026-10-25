@@ -42,7 +42,7 @@ if getattr(sys, "frozen", False):
         CAMPAIGNS_PATH.write_text((P.APP_DIR / "campaigns.json").read_text(encoding="utf-8"), encoding="utf-8")
 LOCK = threading.RLock()
 PORT = int(os.environ.get("CLIP_ENGINE_PORT", "5050"))
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 
 DEFAULT_SETTINGS = {
     "clips_per_video": 4, "min_len": 20, "max_len": 45, "layout": "auto", "captions": True,
@@ -535,6 +535,10 @@ def friendly_error(e: Exception) -> str:
                 "Or use a cookies.txt file in Settings.)")
     if "login" in low and "instagram" in low or "rate-limit" in low:
         return "Instagram needs you signed in. Set 'Use cookies from' to the browser where you're logged in to Instagram and retry."
+    if "tiktok" in low and ("unexpected response" in low or "unable to extract" in low or "blocked" in low):
+        return "TikTok blocked the download. TikTok often stops downloaders: if this is footage you're meant to clip, ask the campaign for the original file, then drag it in."
+    if "instagram" in low and ("login" in low or "rate" in low or "unable" in low or "unexpected" in low):
+        return "Instagram blocked the download. Sign in to Instagram in Firefox, set Settings > Use cookies from > Firefox, then retry. Or ask the campaign for the original file."
     if "unsupported url" in low:
         return "That site or link type isn't supported. Paste a direct video, VOD or clip link."
     if "private" in low:

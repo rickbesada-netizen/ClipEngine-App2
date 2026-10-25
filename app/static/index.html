@@ -374,7 +374,9 @@ function setCampaign(id){
     box.append(el('span', 'lbl', 'Campaign sources'));
     campaign.sources.forEach(u => {
       const r = el('div', 'src-row'); r.append(el('code', null, u));
-      const b = el('button', 'btn', 'Browse'); b.type = 'button'; b.onclick = () => browse(u, b); r.append(b);
+      const single = /\/(video|photo|reel|reels|p|shorts)\/|watch\?v=|youtu\.be\//i.test(u);
+      if (single){ const o = el('a', 'btn', 'Open'); o.href = u; o.target = '_blank'; o.rel = 'noopener'; o.title = 'A single post (often an example from the brief). Opens it to watch.'; r.append(o); }
+      else { const b = el('button', 'btn', 'Browse'); b.type = 'button'; b.onclick = () => browse(u, b); r.append(b); }
       box.append(r);
     });
   }
