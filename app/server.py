@@ -42,6 +42,7 @@ if getattr(sys, "frozen", False):
         CAMPAIGNS_PATH.write_text((P.APP_DIR / "campaigns.json").read_text(encoding="utf-8"), encoding="utf-8")
 LOCK = threading.RLock()
 PORT = int(os.environ.get("CLIP_ENGINE_PORT", "5050"))
+APP_VERSION = "1.2.0"
 
 DEFAULT_SETTINGS = {
     "clips_per_video": 4, "min_len": 20, "max_len": 45, "layout": "auto", "captions": True,
@@ -564,7 +565,7 @@ def state():
             clips = [{k: v for k, v in c.items() if k != "words"} for c in DB["clips"]]
             return jsonify({"jobs": DB["jobs"][-40:], "clips": clips, "settings": DB["settings"], "campaign": DB.get("campaign"),
                             "campaigns": campaigns(), "can_caption": P.CAN_CAPTION, "now": time.time(),
-                            "data_dir": str(P.DATA)})
+                            "data_dir": str(P.DATA), "version": APP_VERSION})
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return jsonify(error=f"Clip Engine hit a problem loading your data: {str(e)[:200]}"), 500
@@ -625,6 +626,10 @@ def add_jobs():
     urls = [u.strip() for u in body.get("urls", []) if u.strip()]
     if not urls:
         return jsonify(error="Add at least one link or file path."), 400
+    share = [u for u in urls if re.search(r"frame\.io|drive\.google|dropbox\.com|wetransfer|mega\.nz|onedrive|sharepoint|box\.com", u, re.I)]
+    if share:
+        return jsonify(error="That's a download page (Frame.io, Google Drive, Dropbox…), not a video. Download the files to your PC first, "
+                             "then press 'Choose video files on this PC' and pick them."), 400
     made = []
     with LOCK:
         for u in urls:
@@ -1106,12 +1111,40 @@ def selftest() -> int:
 
 
 def _already_running(port: int) -> bool:
+    """True only if the SAME version of Clip Engine is already running and answering."""
     import urllib.request
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=1.5) as r:
-            return r.status == 200
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=4) as r:
+            return r.status == 200 and json.loads(r.read()).get("version") == APP_VERSION
     except Exception:  # noqa: BLE001
         return False
+
+
+def _close_other_copies():
+    """Closes older or stuck ClipEngine.exe copies so this one can take over (Windows exe only)."""
+    if os.name != "nt" or not getattr(sys, "frozen", False):
+        return
+    mine = {os.getpid(), os.getppid()}
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command",
+                              "Get-CimInstance Win32_Process -Filter \"Name='ClipEngine.exe'\" | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId)\" }"],
+                             capture_output=True, text=True, timeout=20, creationflags=P._NO_WINDOW).stdout
+    except Exception:  # noqa: BLE001
+        traceback.print_exc(); return
+    others = []
+    for row in out.strip().splitlines():
+        try:
+            pid, ppid = (int(x) for x in row.split())
+        except ValueError:
+            continue
+        if pid in mine or ppid == os.getpid():
+            continue
+        others.append(pid)
+    for pid in others:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, creationflags=P._NO_WINDOW)
+    if others:
+        print(f"Closed {len(others)} older Clip Engine process(es)", flush=True)
+        time.sleep(2)
 
 
 def _port_free(port: int) -> bool:
@@ -1175,6 +1208,8 @@ if __name__ == "__main__":
             pass
         sys.exit(code)
     port = PORT
+    if not _already_running(port):
+        _close_other_copies()
     if _already_running(port):
         # Clip Engine is already open: just show it
         if not os.environ.get("CLIP_ENGINE_NO_BROWSER"):
