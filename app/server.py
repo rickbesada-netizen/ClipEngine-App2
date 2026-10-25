@@ -42,7 +42,7 @@ if getattr(sys, "frozen", False):
         CAMPAIGNS_PATH.write_text((P.APP_DIR / "campaigns.json").read_text(encoding="utf-8"), encoding="utf-8")
 LOCK = threading.RLock()
 PORT = int(os.environ.get("CLIP_ENGINE_PORT", "5050"))
-APP_VERSION = "1.2.4"
+APP_VERSION = "1.2.5"
 
 DEFAULT_SETTINGS = {
     "clips_per_video": 4, "min_len": 20, "max_len": 45, "layout": "auto", "captions": True,

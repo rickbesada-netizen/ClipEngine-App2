@@ -189,7 +189,19 @@ DRIVE_RX = re.compile(r"(drive|docs)\.google\.com/", re.I)
 
 def drive_import(url: str, dest: Path, progress, cancel) -> list[Path]:
     """Downloads the videos from a shared Google Drive folder or file link into dest."""
-    import gdown
+    import importlib.metadata as _md
+    _real_version = _md.version
+
+    def _version(name):  # gdown asks for its own version number when it loads; never let that stop a download
+        try:
+            return _real_version(name)
+        except _md.PackageNotFoundError:
+            return "0"
+    _md.version = _version
+    try:
+        import gdown
+    finally:
+        _md.version = _real_version
 
     dest.mkdir(parents=True, exist_ok=True)
     got: list[Path] = []

@@ -129,7 +129,7 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
 <body>
 <div class="bar"><div class="bar-in">
   <div class="top">
-    <h1><span>Clip</span> Engine</h1>
+    <h1><span>Clip</span> Engine <small id="appver" style="font-size:12px;font-weight:400;opacity:.6"></small></h1>
     <div class="camp"><label for="campaign">Campaign</label><select id="campaign"></select><button class="btn" id="add-camp" type="button">+ Add campaign</button></div>
     <span class="pay" id="pay"></span>
   </div>
@@ -851,6 +851,7 @@ let first = true, fails = 0;
 async function poll(force){
   try {
     S = await api('/api/state'); skew = Date.now() / 1000 - S.now;
+    if (S.version) document.getElementById('appver').textContent = 'v' + S.version;
     const be = $('#boot-error'); if (be) be.remove();
     if (first){
       $('#campaign').innerHTML = S.campaigns.map(c => `<option value="${c.id}">${c.name.replace(/</g, '')}</option>`).join('');
