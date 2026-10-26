@@ -324,6 +324,10 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
             <select id="s-captions"><option value="1">Word-by-word captions</option><option value="0">No captions</option></select></div>
           <div class="field"><label class="lbl" for="s-upper">Caption case</label>
             <select id="s-upper"><option value="1">UPPERCASE</option><option value="0">Normal case</option></select></div>
+          <div class="field"><label class="lbl" for="s-clean">Swearing in captions and hooks</label>
+            <select id="s-clean"><option value="1">Hide it (f***)</option><option value="0">Leave as said</option></select></div>
+          <div class="field"><label class="lbl" for="s-mute">Swearing in the audio</label>
+            <select id="s-mute"><option value="1">Mute the word</option><option value="0">Leave as said</option></select></div>
           <div class="field"><label class="lbl" for="s-hook">Hook title</label>
             <select id="s-hook"><option value="1">Show for first 3 seconds</option><option value="0">Off</option></select></div>
         </div>
@@ -510,12 +514,14 @@ function bindSettings(){
   $('#s-model').value = s.whisper_model; $('#s-height').value = String(s.max_height); $('#s-captions').value = s.captions ? '1' : '0';
   $('#s-upper').value = (s.caption_style || {}).upper === false ? '0' : '1'; $('#s-hook').value = s.hook_overlay ? '1' : '0';
   $('#s-cookies').value = s.cookies_browser || 'none'; $('#s-cookiefile').value = s.cookies_file || '';
+  $('#s-clean').value = s.clean_language === false ? '0' : '1'; $('#s-mute').value = s.mute_swears === false ? '0' : '1';
   const save = () => api('/api/settings', { settings: {
     whisper_model: $('#s-model').value, max_height: +$('#s-height').value, captions: $('#s-captions').value === '1',
     caption_style: { ...(S.settings.caption_style || {}), upper: $('#s-upper').value === '1' }, hook_overlay: $('#s-hook').value === '1',
+    clean_language: $('#s-clean').value === '1', mute_swears: $('#s-mute').value === '1',
     cookies_browser: $('#s-cookies').value, cookies_file: $('#s-cookiefile').value.trim(),
     use_ollama: !!$('#s-ollama').value, ollama_model: $('#s-ollama').value } }).then(() => toast('Saved')).catch(e => toast(e.message));
-  ['#s-model', '#s-height', '#s-captions', '#s-upper', '#s-hook', '#s-cookies', '#s-cookiefile', '#s-ollama'].forEach(id => $(id).onchange = save);
+  ['#s-model', '#s-height', '#s-captions', '#s-upper', '#s-hook', '#s-clean', '#s-mute', '#s-cookies', '#s-cookiefile', '#s-ollama'].forEach(id => $(id).onchange = save);
 }
 async function loadOllama(){
   try {

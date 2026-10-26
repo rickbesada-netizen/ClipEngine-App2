@@ -413,6 +413,37 @@ def transcribe(wav: Path, model_name: str, windows: list[tuple[float, float]] | 
 
 
 # ---------------------------------------------------------------- moment finding
+# ---------------------------------------------------------------- clean language
+_SWEARS = (r"f+u+c+k\w*|motherf\w*|mothaf\w*|fck\w*|fuk\w*|fu+k+i+n\w*|sh+i+t+\w*|bullshit\w*|horseshit|"
+           r"b+i+t+c+h\w*|biatch|ass+hole\w*|asshat|arsehole|dumbass|jackass|badass|smartass|"
+           r"cunt\w*|dick(?:head|s)?|cock(?:sucker)?s?|pussy|pussies|bastard\w*|wh+o+r+e+s?|slut\w*|twat\w*|wank\w*|"
+           r"goddamn\w*|god damn|damn\w*|dammit|prick\w*|piss\w*|bollocks|bloody|"
+           r"n+i+g+g+\w*|f+a+g+\w*|retard\w*|spastic|tranny")
+SWEAR_RX = re.compile(rf"(?<![\w])({_SWEARS})(?![\w])", re.I)
+ASS_RX = re.compile(r"(?<![\w])ass(?:es)?(?![\w])", re.I)
+
+
+def has_swear(s: str) -> bool:
+    return bool(SWEAR_RX.search(s or "") or ASS_RX.search(s or ""))
+
+
+def clean_text(s: str) -> str:
+    """'fucking' -> 'f***ing'-style masking: first letter kept, rest starred."""
+    def mask(m):
+        w = m.group(0)
+        return w[0] + "*" * (len(w) - 1)
+    return ASS_RX.sub(mask, SWEAR_RX.sub(mask, s or ""))
+
+
+def swear_spans(words: list[dict], a: float, b: float) -> list[tuple[float, float]]:
+    """Clip-relative times of sworn words, for muting the audio."""
+    out = []
+    for w in words:
+        if w["e"] > a and w["s"] < b and has_swear(w["w"]):
+            out.append((max(0.0, w["s"] - a - 0.05), min(b - a, w["e"] - a + 0.05)))
+    return out
+
+
 HOOK_RX = re.compile(r"^(listen|look|here'?s|this is (why|how|what)|the (reason|truth|secret|problem)|nobody|everyone|if you|stop|never|why|what|how|you need|i (lost|made|blew|turned)|let me tell you|the biggest|most people)", re.I)
 LAUGH_RX = re.compile(r"\b(ha(ha)+|lol|lmao|\[laugh\w*\]|\(laugh\w*\))", re.I)
 STRONG_RX = re.compile(r"(\$\s?\d|\d+\s?(k|grand|million|percent|%)|!|never|always|nobody|everyone|crazy|insane|biggest|worst|best|truth|secret|mistake|lost|broke|rich|million)", re.I)
@@ -463,7 +494,7 @@ def title_hook(title: str) -> str:
     t = re.sub(r"[-_]+\d{2,4}$", "", t)
     t = re.sub(r"[_]+", " ", t)
     t = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", t)
-    return re.sub(r"\s+", " ", t).strip()[:60]
+    return clean_text(re.sub(r"\s+", " ", t).strip()[:60])
 
 
 def score_candidates(segs: list[dict], loud: np.ndarray, heat: np.ndarray | None, min_len: float, max_len: float, keywords: list[str]) -> list[dict]:
@@ -543,8 +574,11 @@ def hook_line(text: str, avoid: set | None = None) -> str:
     sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
     if avoid:
         sents = [s for s in sents if s.rstrip(".") not in avoid] or sents
-    good = [s for s in sents if 3 <= len(s.split()) <= 11]
-    pool = good or sents or [text]
+    sents = [s for s in sents if not has_swear(s)]
+    good = [s for s in sents if 3 <= len(re.findall(r"[A-Za-z0-9']+", s)) <= 11]
+    pool = good or [s for s in sents if len(re.findall(r"[A-Za-z0-9']+", s)) >= 3]
+    if not pool:
+        return ""  # nothing usable: the caller falls back to the video's title
     best = max(pool, key=lambda s: (bool(STRONG_RX.search(s)) + bool(HOOK_RX.search(s)), -abs(len(s.split()) - 7)))
     best = best.rstrip(".")
     words = best.split()
@@ -560,7 +594,7 @@ def ollama_rank(cands: list[dict], model: str, look_for: str) -> list[dict]:
     for c in cands:
         prompt = (
             "You pick moments for short-form clips. Rate this transcript excerpt 1-10 for how "
-            f"{look_for or 'funny, memorable or quotable'} it is as a standalone 30 second clip, and write a short hook title (max 9 words, no hashtags, no emojis).\n"
+            f"{look_for or 'funny, memorable or quotable'} it is as a standalone 30 second clip, and write a short hook title (max 9 words, no hashtags, no emojis, no swearing).\n"
             'Reply only with JSON like {"rating": 7, "title": "..."}.\n\nExcerpt:\n' + c["text"][:1500]
         )
         body = json.dumps({"model": model, "prompt": prompt, "stream": False, "format": "json"}).encode()
@@ -571,7 +605,7 @@ def ollama_rank(cands: list[dict], model: str, look_for: str) -> list[dict]:
             rating = float(res.get("rating", 0))
             c["score"] = round(c["score"] + (rating - 5) * 0.6, 2)
             if res.get("title"):
-                c["ai_title"] = str(res["title"]).strip().strip('"')[:80]
+                c["ai_title"] = clean_text(str(res["title"]).strip().strip('"')[:80])
             c["reasons"] = c["reasons"] + [f"local AI rating {rating:g}/10"]
         except Exception:
             pass
@@ -710,7 +744,7 @@ def ass_escape(s: str) -> str:
     return s.replace("\\", "").replace("{", "(").replace("}", ")").replace("\n", " ")
 
 
-def build_ass(words: list[dict], a: float, b: float, margin_v: int, hook: str | None, style: dict) -> str:
+def build_ass(words: list[dict], a: float, b: float, margin_v: int, hook: str | None, style: dict, clean: bool = True) -> str:
     size = int(style.get("size", 96))
     upper = style.get("upper", True)
     hi = style.get("highlight", "&H00E5FF&")
@@ -731,7 +765,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = []
     if hook:
-        lines.append(f"Dialogue: 1,{ass_time(0)},{ass_time(min(3.2, b - a))},Hook,,0,0,0,,{{\\fad(120,200)}}{ass_escape(hook)}")
+        lines.append(f"Dialogue: 1,{ass_time(0)},{ass_time(min(3.2, b - a))},Hook,,0,0,0,,{{\\fad(120,200)}}{ass_escape(clean_text(hook) if clean else hook)}")
     ws = [w for w in words if w["e"] > a and w["s"] < b]
     groups, cur = [], []
     for w in ws:
@@ -753,7 +787,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             e = g[wi + 1]["s"] if wi + 1 < len(g) else g_end
             parts = []
             for k, x in enumerate(g):
-                t = ass_escape(x["w"])
+                t = ass_escape(clean_text(x["w"]) if clean else x["w"])
                 t = t.upper() if upper else t
                 parts.append(f"{{\\c{hi}}}{t}{{\\c&HFFFFFF&}}" if k == wi else t)
             pop = "{\\fscx108\\fscy108\\t(0,90,\\fscx100\\fscy100)}" if wi == 0 else ""
@@ -782,13 +816,18 @@ def render_clip(src: Path, info: dict, clip: dict, words: list[dict], settings: 
     hook = clip.get("hook") if settings.get("hook_overlay", True) else None
     final = "[v]"
     if captions or hook:
-        (work / "subs.ass").write_text(build_ass(words if captions else [], a, b, margin, hook, settings.get("caption_style", {})), encoding="utf-8")
+        (work / "subs.ass").write_text(build_ass(words if captions else [], a, b, margin, hook, settings.get("caption_style", {}), settings.get("clean_language", True)), encoding="utf-8")
         vf += ";[v]ass=subs.ass:fontsdir=fonts[vo]"
         final = "[vo]"
+    af = "loudnorm=I=-14:TP=-1.5:LRA=11"
+    if settings.get("mute_swears", True):
+        mutes = swear_spans(words, a, b)
+        if mutes:
+            af = ",".join(f"volume=enable='between(t,{x:.2f},{y:.2f})':volume=0" for x, y in mutes) + "," + af
     cmd = [FFMPEG, "-y", "-ss", f"{a:.2f}", "-i", str(src), "-t", f"{b - a:.2f}",
            "-filter_complex", vf, "-map", final, "-map", "0:a?",
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", "30",
-           "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
+           "-af", af, "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
            "-movflags", "+faststart", str(out_path)]
     run(cmd, cwd=work)
     thumb = thumb or out_path.with_suffix(".jpg")
@@ -804,4 +843,4 @@ def caption_text(hook: str, campaign: dict) -> str:
     req = [t if t.startswith("#") else "#" + t for t in campaign.get("hashtags", []) if t]
     extra = [t if t.startswith("#") else "#" + t for t in campaign.get("extra_tags", []) if t]
     tags = list(dict.fromkeys(req + extra))[:6]
-    return f"{hook}\n\n{' '.join(tags)}".strip()
+    return f"{clean_text(hook)}\n\n{' '.join(tags)}".strip()

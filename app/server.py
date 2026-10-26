@@ -50,7 +50,7 @@ DEFAULT_SETTINGS = {
     "clips_per_video": 4, "min_len": 20, "max_len": 45, "layout": "auto", "captions": True,
     "hook_overlay": True, "whisper_model": "base", "max_height": 1080, "cookies_browser": "none",
     "cookies_file": "", "use_ollama": False, "youtube_privacy": "public", "ollama_model": "", "caption_style": {"upper": True, "size": 96},
-    "finder_platforms": [], "finder_min_rate": 0, "finder_min_budget": 300, "finder_hide_apply": False, "finder_pool": True,
+    "clean_language": True, "mute_swears": True, "finder_platforms": [], "finder_min_rate": 0, "finder_min_budget": 300, "finder_hide_apply": False, "finder_pool": True,
 }
 
 
@@ -1610,6 +1610,7 @@ if __name__ == "__main__":
     try:
         if recover_clips():
             organise_clips()
+        clean_old_captions()
     except Exception:  # noqa: BLE001
         traceback.print_exc()
     threading.Thread(target=worker, daemon=True).start()
