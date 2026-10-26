@@ -1,0 +1,25 @@
+name: Probe Whop page
+on:
+  push:
+    branches: [probe]
+permissions:
+  contents: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          mkdir -p probe
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+          curl -sSL -A "$UA" -o probe/discover.html -w "%{http_code} %{size_download}\n" https://whop.com/discover/content-rewards/ | tee probe/status.txt
+          curl -sSL -A "$UA" -o probe/discover2.html -w "%{http_code} %{size_download}\n" "https://whop.com/discover/content-rewards/?page=2" | tee -a probe/status.txt
+          curl -sSL -A "$UA" -o probe/robots.txt https://whop.com/robots.txt
+          pip install curl_cffi >/dev/null 2>&1
+          python3 -c "
+          from curl_cffi import requests
+          r = requests.get('https://whop.com/discover/content-rewards/', impersonate='chrome')
+          open('probe/discover_cffi.html','w').write(r.text); print('cffi', r.status_code, len(r.text))
+          " | tee -a probe/status.txt
+          git config user.name probe; git config user.email probe@users.noreply.github.com
+          git add probe; git commit -qm "probe output"; git push -q origin HEAD:probe
