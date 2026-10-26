@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap>
+    <loc>https://vyro.com/sitemap/pages.xml</loc>
+    <lastmod>2026-10-26T20:35:56.821Z</lastmod>
+  </sitemap>
+  <sitemap>
+    <loc>https://vyro.com/sitemap/campaigns.xml</loc>
+    <lastmod>2026-10-26T20:35:56.821Z</lastmod>
+  </sitemap>
+  <sitemap>
+    <loc>https://vyro.com/sitemap/help-categories.xml</loc>
+    <lastmod>2026-10-26T20:35:56.821Z</lastmod>
+  </sitemap>
+  <sitemap>
+    <loc>https://vyro.com/sitemap/help-articles.xml</loc>
+    <lastmod>2026-10-26T20:35:56.821Z</lastmod>
+  </sitemap>
+  <sitemap>
+    <loc>https://vyro.com/sitemap/blog-posts.xml</loc>
+    <lastmod>2026-10-26T20:35:56.821Z</lastmod>
+  </sitemap>
+  <sitemap>
+    <loc>https://vyro.com/sitemap/docs.xml</loc>
+    <lastmod>2026-10-26T20:35:56.821Z</lastmod>
+  </sitemap>
+</sitemapindex>
