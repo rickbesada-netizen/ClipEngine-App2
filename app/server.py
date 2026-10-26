@@ -32,6 +32,7 @@ import youtube as YT  # noqa: E402
 import campaign_import as CI  # noqa: E402
 import kit as KIT  # noqa: E402
 import cloudsync as CS  # noqa: E402
+import finder as FIND  # noqa: E402
 
 APP = Flask(__name__, static_folder=str(P.APP_DIR / "static"), static_url_path="/static")
 DB_PATH = P.DATA / "db.json"
@@ -43,12 +44,13 @@ if getattr(sys, "frozen", False):
         CAMPAIGNS_PATH.write_text((P.APP_DIR / "campaigns.json").read_text(encoding="utf-8"), encoding="utf-8")
 LOCK = threading.RLock()
 PORT = int(os.environ.get("CLIP_ENGINE_PORT", "5050"))
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.4.0"
 
 DEFAULT_SETTINGS = {
     "clips_per_video": 4, "min_len": 20, "max_len": 45, "layout": "auto", "captions": True,
     "hook_overlay": True, "whisper_model": "base", "max_height": 1080, "cookies_browser": "none",
     "cookies_file": "", "use_ollama": False, "youtube_privacy": "public", "ollama_model": "", "caption_style": {"upper": True, "size": 96},
+    "finder_platforms": [], "finder_min_rate": 0, "finder_min_budget": 300, "finder_hide_apply": False, "finder_pool": True,
 }
 
 
@@ -1138,6 +1140,157 @@ def kit_file(cid, name):
     return send_from_directory(KIT.KIT_DIR / Path(cid).name, Path(name).name, as_attachment=request.args.get("download") == "1")
 
 
+# ---------------------------------------------------------------- campaign finder (contentrewards.com/discover)
+FINDER_EVERY = 3 * 3600
+FINDER_WAKE = threading.Event()
+
+
+def _camp_id(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", name.lower())[:24]
+
+
+def finder_matches(it: dict, st: dict) -> bool:
+    plats = st.get("finder_platforms") or []
+    if plats and not any(p in it.get("platforms", []) for p in plats):
+        return False
+    if it.get("type") == "cpm":
+        if (it.get("rate") or 0) < float(st.get("finder_min_rate") or 0):
+            return False
+    elif not st.get("finder_pool", True):
+        return False
+    if (it.get("budget_left") or 0) < float(st.get("finder_min_budget") or 0):
+        return False
+    if st.get("finder_hide_apply") and it.get("requires_application"):
+        return False
+    return True
+
+
+def finder_refresh():
+    items = FIND.fetch()
+    t = time.time()
+    with LOCK:
+        f = DB.setdefault("finder", {"campaigns": {}, "hidden": [], "seen": []})
+        live = set()
+        for it in items:
+            old = f["campaigns"].get(it["id"], {})
+            it["first_seen"] = old.get("first_seen", t)
+            f["campaigns"][it["id"]] = it
+            live.add(it["id"])
+        for cid, it in list(f["campaigns"].items()):
+            it["live"] = cid in live
+            if not it["live"] and t - it.get("first_seen", t) > 14 * 86400:
+                del f["campaigns"][cid]  # gone from the list for a while: forget it
+        f["checked"], f["error"] = t, ""
+    save_db()
+
+
+def finder_loop():
+    time.sleep(20)
+    while True:
+        f = DB.get("finder") or {}
+        due = time.time() - f.get("checked", 0) >= FINDER_EVERY
+        if due or FINDER_WAKE.is_set():
+            FINDER_WAKE.clear()
+            try:
+                finder_refresh()
+            except Exception as e:  # noqa: BLE001
+                with LOCK:
+                    DB.setdefault("finder", {"campaigns": {}, "hidden": [], "seen": []})["error"] = str(e)[:200]
+                    DB["finder"]["checked"] = time.time()
+                print("finder:", e, flush=True)
+        FINDER_WAKE.wait(300)
+
+
+@APP.get("/api/finder")
+def finder_list():
+    with LOCK:
+        f = DB.get("finder") or {"campaigns": {}, "hidden": [], "seen": []}
+        st = DB["settings"]
+        mine = {c["id"] for c in campaigns()}
+        hidden, seen = set(f.get("hidden", [])), set(f.get("seen", []))
+        out = []
+        for it in f.get("campaigns", {}).values():
+            x = dict(it)
+            x["name"] = FIND.clean_name(it["title"], it.get("brand", ""))
+            x["added"] = _camp_id(x["name"]) in mine
+            x["match"] = finder_matches(it, st)
+            x["hidden"] = it["id"] in hidden
+            x["new"] = it["id"] not in seen
+            out.append(x)
+        out.sort(key=lambda x: (not x.get("live", True), not x["match"], -(x.get("rate") or 0), -(x.get("budget_left") or 0)))
+        return jsonify(campaigns=out, checked=f.get("checked", 0), error=f.get("error", ""),
+                       new=sum(1 for x in out if x["new"] and x["match"] and not x["hidden"] and x.get("live", True) and not x["added"]))
+
+
+@APP.post("/api/finder/refresh")
+def finder_refresh_route():
+    try:
+        finder_refresh()
+    except Exception as e:  # noqa: BLE001
+        return jsonify(error=f"Couldn't load the campaign list: {str(e)[:200]}"), 400
+    return finder_list()
+
+
+@APP.post("/api/finder/mark")
+def finder_mark():
+    b = request.get_json(force=True) or {}
+    with LOCK:
+        f = DB.setdefault("finder", {"campaigns": {}, "hidden": [], "seen": []})
+        if b.get("seen") == "all":
+            f["seen"] = list(f.get("campaigns", {}))
+        if b.get("hide"):
+            f.setdefault("hidden", []).append(b["hide"])
+        if b.get("unhide"):
+            f["hidden"] = [x for x in f.get("hidden", []) if x != b["unhide"]]
+    save_db()
+    return jsonify(ok=True)
+
+
+@APP.post("/api/finder/import")
+def finder_import():
+    cid = (request.get_json(force=True) or {}).get("id")
+    with LOCK:
+        it = dict((DB.get("finder") or {}).get("campaigns", {}).get(cid) or {})
+    if not it:
+        return jsonify(error="That campaign isn't in the list any more. Press Check now."), 404
+    text = FIND.brief_text(it)
+    read_rules = []
+    for u in FIND.rules_links(it):
+        try:
+            extra = CI.text_from_url(u)
+            if len(extra.strip()) > 80:
+                text += "\n\nRULES PAGE (" + u + "):\n" + extra[:20000]
+                read_rules.append(u)
+        except Exception as e:  # noqa: BLE001
+            print("finder rules link:", u, e, flush=True)
+    draft = CI.parse(text)
+    name = FIND.clean_name(it["title"], it.get("brand", ""))
+    draft["name"] = name
+    draft["id"] = _camp_id(name)
+    plats = [FIND.PLATFORM_NAMES.get(p, p) for p in it.get("platforms", [])]
+    if plats:
+        draft["platforms"] = plats
+    bits = []
+    if it.get("type") == "cpm" and it.get("rate_label"):
+        bits.append(f"{it['rate_label']} per 1K views")
+    elif it.get("type") == "pool" and it.get("budget_total"):
+        bits.append(f"${it['budget_total']:,.0f} prize pool (top clips share it)")
+    if isinstance(it.get("budget_left"), (int, float)):
+        bits.append(f"${it['budget_left']:,.0f} budget left")
+    if draft.get("pay") and draft["pay"] not in " · ".join(bits):
+        bits.append(draft["pay"])
+    draft["pay"] = " · ".join(bits)
+    draft["join_url"] = it["url"]
+    if not draft.get("niche") and it.get("category"):
+        draft["niche"] = it["category"]
+    if it.get("requires_application"):
+        draft.setdefault("rules", []).insert(0, "You must apply and be accepted on Whop before posting")
+    draft["exists"] = draft["id"] in {c["id"] for c in campaigns()}
+    draft["read_rules"] = read_rules
+    draft["description"] = it.get("description", "")
+    return jsonify(campaign=draft)
+
+
 # ---------------------------------------------------------------- cloud sync
 SYNC = CS.Sync(P.DATA / "sync.json")
 
@@ -1441,6 +1594,7 @@ if __name__ == "__main__":
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=watcher, daemon=True).start()
     threading.Thread(target=sync_loop, daemon=True).start()
+    threading.Thread(target=finder_loop, daemon=True).start()
     SYNC_WAKE.set()
     url = f"http://127.0.0.1:{port}"
     from werkzeug.serving import make_server

@@ -74,6 +74,14 @@ h2{font-family:var(--display);font-weight:700;font-size:21px;text-transform:uppe
 .clips{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,560px),1fr));gap:16px}
 .clip{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px;display:grid;grid-template-columns:190px minmax(0,1fr);gap:14px}
 @media (max-width:560px){.clip{grid-template-columns:minmax(0,1fr)}}
+.fd-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}
+.fd{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.fd.dim{opacity:.55}
+.fd h3{margin:0;font-size:16px;line-height:1.3;word-break:break-word}
+.fd .big{font-size:20px;font-weight:700}
+.fd .bar2{height:6px;background:var(--line);border-radius:3px;overflow:hidden}.fd .bar2 i{display:block;height:100%;background:var(--accent)}
+.fd .desc{font-size:13px;color:var(--muted);white-space:pre-wrap;max-height:4.2em;overflow:hidden;word-break:break-word}
+.fd .row{flex-wrap:wrap}
 .elsewhere{width:190px;max-width:100%;aspect-ratio:9/16;border:1px dashed var(--line);border-radius:6px;display:flex;align-items:center;justify-content:center;text-align:center;padding:12px;font-size:13px;color:var(--muted);box-sizing:border-box}
 .clip video{width:190px;max-width:100%;aspect-ratio:9/16;background:#000;border-radius:6px;object-fit:cover}
 .clip .meta{display:flex;flex-direction:column;gap:8px;min-width:0}
@@ -139,6 +147,7 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
     <button role="tab" data-tab="clips" aria-selected="false">Clips<span class="n" id="n-clips"></span></button>
     <button role="tab" data-tab="accounts" aria-selected="false">Accounts</button>
     <button role="tab" data-tab="rules" aria-selected="false">Campaigns</button>
+    <button role="tab" data-tab="discover" aria-selected="false">New campaigns<span class="n" id="n-disc"></span></button>
     <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
   </nav>
 </div></div>
@@ -282,6 +291,26 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
     </div>
   </section>
 
+  <section id="tab-discover" hidden>
+    <div class="panel" style="margin-bottom:14px">
+      <h2>New campaigns on Whop</h2>
+      <p class="hint">Live clipping campaigns from Whop's public Content Rewards list, checked every 3 hours. To take one on: press <b>Open on Whop</b> and join it there, then <b>Add to Clip Engine</b> sets it up here (rules, hashtags, pay, platforms). Joining stays your click on purpose: it's your Whop account and payouts.</p>
+      <div class="fields" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
+        <div class="field"><span class="lbl">Platforms you post on</span>
+          <div class="row" id="fd-plats" style="gap:10px">
+            <label><input type="checkbox" value="youtube"> YouTube</label><label><input type="checkbox" value="tiktok"> TikTok</label>
+            <label><input type="checkbox" value="instagram"> Instagram</label><label><input type="checkbox" value="x"> X</label></div></div>
+        <div class="field"><label class="lbl" for="fd-rate">Min pay per 1K views ($)</label><input type="number" id="fd-rate" min="0" step="0.25"></div>
+        <div class="field"><label class="lbl" for="fd-budget">Min budget left ($)</label><input type="number" id="fd-budget" min="0" step="100"></div>
+        <div class="field"><span class="lbl">Also</span>
+          <label><input type="checkbox" id="fd-pool"> Show prize-pool campaigns</label>
+          <label><input type="checkbox" id="fd-apply"> Hide ones you must apply for</label></div>
+      </div>
+      <div class="row"><button class="go" id="fd-check" type="button" style="font-size:17px">Check now</button>
+        <label><input type="checkbox" id="fd-all"> Show campaigns that don't match too</label><span class="hint" id="fd-status"></span></div>
+    </div>
+    <div id="fd-list" class="fd-list"></div>
+  </section>
   <section id="tab-settings" hidden>
     <div class="grid">
       <div class="panel">
@@ -376,8 +405,9 @@ let skew = 0;
 /* tabs */
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-selected', x === b));
-  ['make', 'clips', 'accounts', 'rules', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== b.dataset.tab);
+  ['make', 'clips', 'accounts', 'rules', 'discover', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== b.dataset.tab);
   if (b.dataset.tab === 'settings') { loadOllama(); loadYT(); }
+  if (b.dataset.tab === 'discover') { loadFinder(true); }
   if (b.dataset.tab === 'accounts') loadAccounts();
   if (b.dataset.tab === 'clips') loadWatch();
 });
@@ -899,6 +929,79 @@ $('#sync-signin').onclick = () => syncLogin(false);
 $('#sync-go').onclick = async () => { try { SY = await api('/api/sync/now', {}, 'POST', 120000); showSync(); toast('Synced'); poll(true); } catch (e) { toast(e.message); loadSync(); } };
 $('#sync-out-btn').onclick = async () => { SY = await api('/api/sync/logout', {}); showSync(); toast('Signed out. Everything stays on this computer.'); };
 loadSync(); setInterval(loadSync, 20000);
+
+/* campaign finder */
+let FD = null;
+const PL = { youtube: 'YouTube', tiktok: 'TikTok', instagram: 'Instagram', x: 'X' };
+function money(n){ return n == null ? '?' : '$' + Math.round(n).toLocaleString(); }
+function bindFinder(){
+  const st = S.settings;
+  document.querySelectorAll('#fd-plats input').forEach(c => { c.checked = (st.finder_platforms || []).includes(c.value); });
+  $('#fd-rate').value = st.finder_min_rate || 0; $('#fd-budget').value = st.finder_min_budget == null ? 300 : st.finder_min_budget;
+  $('#fd-pool').checked = st.finder_pool !== false; $('#fd-apply').checked = !!st.finder_hide_apply;
+}
+async function saveFinder(){
+  const settings = { finder_platforms: [...document.querySelectorAll('#fd-plats input:checked')].map(c => c.value),
+    finder_min_rate: +$('#fd-rate').value || 0, finder_min_budget: +$('#fd-budget').value || 0,
+    finder_pool: $('#fd-pool').checked, finder_hide_apply: $('#fd-apply').checked };
+  Object.assign(S.settings, settings);
+  await api('/api/settings', { settings }); loadFinder(false);
+}
+['#fd-rate', '#fd-budget', '#fd-pool', '#fd-apply'].forEach(id => $(id).onchange = saveFinder);
+document.querySelectorAll('#fd-plats input').forEach(c => c.onchange = saveFinder);
+$('#fd-all').onchange = () => renderFinder();
+$('#fd-check').onclick = async () => {
+  const b = $('#fd-check'); b.disabled = true; b.textContent = 'Checking...';
+  try { FD = await api('/api/finder/refresh', {}, 'POST', 90000); renderFinder(); toast('Campaign list updated'); }
+  catch (e) { toast(e.message); }
+  finally { b.disabled = false; b.textContent = 'Check now'; }
+};
+async function loadFinder(opened){
+  try { FD = await api('/api/finder'); } catch (e) { return; }
+  $('#n-disc').textContent = FD.new ? String(FD.new) : '';
+  if (opened){ bindFinder(); renderFinder(); if (FD.new) api('/api/finder/mark', { seen: 'all' }).then(() => { $('#n-disc').textContent = ''; }).catch(() => {}); }
+  else if (!$('#tab-discover').hidden) renderFinder();
+}
+function renderFinder(){
+  if (!FD) return;
+  const box = $('#fd-list'); box.innerHTML = '';
+  $('#fd-status').textContent = FD.error ? 'Last check failed: ' + FD.error : FD.checked ? 'Checked ' + ago(FD.checked) + '. Checks again every 3 hours.' : 'Not checked yet. Press Check now.';
+  const all = $('#fd-all').checked;
+  const list = FD.campaigns.filter(c => !c.hidden && c.live !== false && (all || c.match));
+  if (!list.length){ box.append(el('p', 'empty', FD.campaigns.length ? 'No campaigns match your filters right now. Lower the minimums, or tick "Show campaigns that don\u2019t match too".' : 'Press Check now to load the campaign list.')); return; }
+  list.forEach(c => {
+    const d = el('div', 'fd' + (c.match ? '' : ' dim'));
+    const tags = el('div', 'tags');
+    if (c.new) tags.append(el('span', 'tag st-posted', 'New'));
+    if (c.added) tags.append(el('span', 'tag st-submitted', 'In Clip Engine'));
+    tags.append(el('span', 'tag', c.brand || 'Whop'));
+    if (c.category) tags.append(el('span', 'tag', c.category));
+    if (c.requires_application) tags.append(el('span', 'tag', 'Must apply'));
+    (c.platforms || []).forEach(p => tags.append(el('span', 'tag', PL[p] || p)));
+    d.append(tags, el('h3', '', c.title));
+    d.append(el('div', 'big', c.type === 'cpm' ? (c.rate_label || '?') + ' per 1K views' : c.type === 'pool' ? money(c.budget_total) + ' prize pool' : (c.rate_label || c.type)));
+    d.append(el('div', 'hint', money(c.budget_left) + ' budget left of ' + money(c.budget_total) + (c.creators ? ' \u00b7 ' + c.creators.toLocaleString() + ' clippers' : '')));
+    const br = el('div', 'bar2'); const bi = el('i'); bi.style.width = Math.min(100, c.progress || 0) + '%'; br.append(bi); d.append(br);
+    if (c.description) d.append(el('div', 'desc', c.description));
+    const row = el('div', 'row');
+    const o = el('a', 'btn', 'Open on Whop'); o.href = c.url; o.target = '_blank'; o.rel = 'noopener'; row.append(o);
+    const a = el('button', 'btn', c.added ? 'Update in Clip Engine' : 'Add to Clip Engine'); a.type = 'button';
+    a.onclick = async () => {
+      a.disabled = true; a.textContent = 'Reading the rules...';
+      try {
+        const r = await api('/api/finder/import', { id: c.id }, 'POST', 90000);
+        document.querySelector('[data-tab=rules]').click();
+        fillForm(r.campaign); delete DRAFT.read_rules; delete DRAFT.description;
+        $('#cb-status').textContent = 'From Whop: ' + c.title + '. ' + (r.campaign.read_rules && r.campaign.read_rules.length ? 'Read the rules page too. ' : 'Open it on Whop to read the full rules. ') + 'Check the details, then save.';
+      } catch (e) { toast(e.message); }
+      finally { a.disabled = false; a.textContent = c.added ? 'Update in Clip Engine' : 'Add to Clip Engine'; }
+    };
+    row.append(a);
+    const h = el('button', 'btn', 'Hide'); h.type = 'button'; h.onclick = () => api('/api/finder/mark', { hide: c.id }).then(() => { c.hidden = true; renderFinder(); }); row.append(h);
+    d.append(row); box.append(d);
+  });
+}
+loadFinder(false); setInterval(() => loadFinder(false), 60000);
 /* poll */
 let first = true, fails = 0;
 async function poll(force){
