@@ -74,6 +74,7 @@ h2{font-family:var(--display);font-weight:700;font-size:21px;text-transform:uppe
 .clips{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,560px),1fr));gap:16px}
 .clip{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px;display:grid;grid-template-columns:190px minmax(0,1fr);gap:14px}
 @media (max-width:560px){.clip{grid-template-columns:minmax(0,1fr)}}
+.elsewhere{width:190px;max-width:100%;aspect-ratio:9/16;border:1px dashed var(--line);border-radius:6px;display:flex;align-items:center;justify-content:center;text-align:center;padding:12px;font-size:13px;color:var(--muted);box-sizing:border-box}
 .clip video{width:190px;max-width:100%;aspect-ratio:9/16;background:#000;border-radius:6px;object-fit:cover}
 .clip .meta{display:flex;flex-direction:column;gap:8px;min-width:0}
 .clip .src-t{font-size:12.5px;color:var(--muted);overflow-wrap:anywhere}
@@ -129,7 +130,7 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
 <body>
 <div class="bar"><div class="bar-in">
   <div class="top">
-    <h1><span>Clip</span> Engine <small id="appver" style="font-size:12px;font-weight:400;opacity:.6"></small></h1>
+    <h1><span>Clip</span> Engine <small id="appver" style="font-size:12px;font-weight:400;opacity:.6"></small> <small id="syncbadge" style="font-size:12px;font-weight:400;opacity:.6"></small></h1>
     <div class="camp"><label for="campaign">Campaign</label><select id="campaign"></select><button class="btn" id="add-camp" type="button">+ Add campaign</button></div>
     <span class="pay" id="pay"></span>
   </div>
@@ -311,6 +312,22 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
         <p class="hint" id="ollama-hint">Install Ollama from ollama.com and run <span class="mono">ollama pull llama3.2</span> to have a free local model rate each moment and write the hook title. Works without it.</p>
         <h2 style="margin-top:8px">Disk space</h2>
         <div class="row"><button class="btn" id="cleanup" type="button">Delete downloaded source videos</button><span class="hint">Finished clips are kept.</span></div>
+      </div>
+      <div class="panel" style="grid-column:1/-1" id="sync-panel">
+        <h2>Sync across computers</h2>
+        <p class="hint">Sign in on each computer with the same email and password. Your campaigns, settings, channel names, clip list, captions, posted links and Whop deadlines then stay the same everywhere and update by themselves. Video files stay on the computer that made them, because they're too big to sync for free. Clips made on another computer still show here, marked as such.</p>
+        <div id="sync-out">
+          <div class="fields" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+            <div class="field"><label class="lbl" for="sync-email">Email</label><input type="email" id="sync-email" autocomplete="username"></div>
+            <div class="field"><label class="lbl" for="sync-pass">Password (8+ characters)</label><input type="password" id="sync-pass" autocomplete="current-password"></div>
+          </div>
+          <div class="row"><button class="go" id="sync-create" type="button" style="font-size:17px">Create account</button><button class="btn" id="sync-signin" type="button">Sign in</button>
+            <span class="hint">First computer: Create account. Every other computer: Sign in.</span></div>
+        </div>
+        <div id="sync-in" hidden>
+          <p id="sync-state" style="margin:0"></p>
+          <div class="row"><button class="btn" id="sync-go" type="button">Sync now</button><button class="btn" id="sync-out-btn" type="button">Sign out</button></div>
+        </div>
       </div>
       <div class="panel" style="grid-column:1/-1">
         <h2>Upload to YouTube from Clip Engine</h2>
@@ -524,9 +541,11 @@ function renderClips(force){
   const mine = S.clips.filter(c => campaign && c.campaign === campaign.id);
   const list = mine.filter(c => filter === 'all' || c.status === filter);
   $('#n-clips').textContent = mine.length ? String(mine.length) : '';
-  const sig = JSON.stringify([filter, campaign && campaign.id, list.map(c => [c.id, c.file, c.status, (c.posts || []).length, (c.posts || []).filter(p => p.submitted).length, JSON.stringify(c.yt_upload || {}), !!c.yt_batch]), !!(YTS && YTS.connected)]);
+  const sig = JSON.stringify([filter, campaign && campaign.id, list.map(c => [c.id, c.file, c.here, c.caption, c.status, (c.posts || []).length, (c.posts || []).filter(p => p.submitted).length, JSON.stringify(c.yt_upload || {}), !!c.yt_batch]), !!(YTS && YTS.connected)]);
   renderDue();
-  if (sig === clipSig && !force) return; clipSig = sig;
+  if (sig === clipSig && !force) return;
+  if (!force && document.activeElement && document.activeElement.id && document.activeElement.id.startsWith('cap-')) return;
+  clipSig = sig;
   const box = $('#clips'); box.innerHTML = '';
   if (!mine.length){
     const other = {}; S.clips.forEach(c => { other[c.campaign] = (other[c.campaign] || 0) + 1; });
@@ -551,7 +570,11 @@ function renderClips(force){
 }
 function clipCard(c){
   const card = el('div', 'clip');
-  const v = el('video'); v.src = '/clips/' + c.file.split('/').map(encodeURIComponent).join('/'); v.poster = '/thumbs/' + encodeURIComponent(c.thumb || (c.id + '.jpg')); v.controls = true; v.preload = 'none'; v.playsInline = true; card.append(v);
+  if (c.here === false){
+    const ph = el('div', 'elsewhere', 'Made on your other computer. The video file is there; everything else is synced.'); card.append(ph);
+  } else {
+    const v = el('video'); v.src = '/clips/' + c.file.split('/').map(encodeURIComponent).join('/'); v.poster = '/thumbs/' + encodeURIComponent(c.thumb || (c.id + '.jpg')); v.controls = true; v.preload = 'none'; v.playsInline = true; card.append(v);
+  }
   const m = el('div', 'meta'); card.append(m);
   const tags = el('div', 'tags');
   tags.append(el('span', 'tag st-' + c.status, { ready: 'Ready to post', posted: 'Posted', submitted: 'Submitted' }[c.status] || c.status));
@@ -568,14 +591,14 @@ function clipCard(c){
   if (missing.length) m.append(el('p', 'notice', 'Caption is missing ' + missing.join(' ')));
   const acts = el('div', 'row');
   const b1 = el('button', 'btn', 'Copy caption'); b1.type = 'button'; b1.onclick = () => copy(ta.value); acts.append(b1);
-  const b2 = el('button', 'btn', 'Show file'); b2.type = 'button'; b2.onclick = () => api('/api/open', { file: c.file }).catch(e => toast(e.message)); acts.append(b2);
+  if (c.here !== false){ const b2 = el('button', 'btn', 'Show file'); b2.type = 'button'; b2.onclick = () => api('/api/open', { file: c.file }).catch(e => toast(e.message)); acts.append(b2); }
   const b3 = el('a', 'btn', 'Watch source'); b3.href = c.source_url + (c.source_url.includes('youtube.com/watch') ? '&t=' + Math.floor(c.start) + 's' : ''); b3.target = '_blank'; b3.rel = 'noopener'; acts.append(b3);
   const b4 = el('button', 'btn', 'Delete'); b4.type = 'button'; b4.onclick = () => { if (b4.dataset.sure){ api('/api/clips/' + c.id, null, 'DELETE').then(poll); } else { b4.dataset.sure = 1; b4.textContent = 'Click again to delete'; } }; acts.append(b4);
   m.append(acts);
 
   const up = el('div', 'row');
   const yu = c.yt_upload || {};
-  if (YTS && YTS.connected){
+  if (YTS && YTS.connected && c.here !== false){
     const yb = el('button', 'btn', yu.state === 'uploading' ? 'Uploading to YouTube ' + Math.round((yu.progress || 0) * 100) + '%' : 'Upload to YouTube'); yb.type = 'button';
     yb.disabled = yu.state === 'uploading';
     yb.onclick = () => api('/api/clips/' + c.id + '/youtube', {}).then(() => { toast('Uploading to YouTube'); poll(true); }).catch(e => toast(e.message));
@@ -846,6 +869,34 @@ $('#brand-apply').onclick = async () => {
   b.disabled = false; b.textContent = 'Apply to my YouTube channel';
 };
 
+
+/* cloud sync */
+let SY = null;
+function ago(t){ const s = Math.max(0, Date.now() / 1000 - t); return s < 60 ? 'just now' : s < 3600 ? Math.floor(s / 60) + ' min ago' : clock(t); }
+function showSync(){
+  if (!SY) return;
+  $('#sync-out').hidden = SY.signed_in; $('#sync-in').hidden = !SY.signed_in;
+  const badge = $('#syncbadge');
+  if (SY.signed_in){
+    $('#sync-state').textContent = 'Signed in as ' + SY.email + '. ' + (SY.busy ? 'Syncing...' : SY.error ? 'Last sync failed: ' + SY.error : SY.last_ok ? 'Synced ' + ago(SY.last_ok) + '.' : 'Waiting to sync.');
+    badge.textContent = SY.error ? '\u00b7 sync problem' : '\u00b7 synced';
+    badge.title = SY.error || ('Synced with ' + SY.email);
+  } else { badge.textContent = ''; }
+}
+async function loadSync(){ try { SY = await api('/api/sync'); showSync(); } catch (e) {} }
+async function syncLogin(create){
+  const email = $('#sync-email').value.trim(), password = $('#sync-pass').value;
+  if (!email || password.length < 8){ toast('Enter your email and a password of at least 8 characters'); return; }
+  const b = create ? $('#sync-create') : $('#sync-signin'); const old = b.textContent; b.disabled = true; b.textContent = create ? 'Creating...' : 'Signing in...';
+  try { SY = await api('/api/sync/login', { email, password, create }, 'POST', 120000); $('#sync-pass').value = ''; showSync(); toast(create ? 'Account created. This computer is synced.' : 'Signed in. Your data is synced.'); poll(true); }
+  catch (e) { toast(e.message); }
+  finally { b.disabled = false; b.textContent = old; }
+}
+$('#sync-create').onclick = () => syncLogin(true);
+$('#sync-signin').onclick = () => syncLogin(false);
+$('#sync-go').onclick = async () => { try { SY = await api('/api/sync/now', {}, 'POST', 120000); showSync(); toast('Synced'); poll(true); } catch (e) { toast(e.message); loadSync(); } };
+$('#sync-out-btn').onclick = async () => { SY = await api('/api/sync/logout', {}); showSync(); toast('Signed out. Everything stays on this computer.'); };
+loadSync(); setInterval(loadSync, 20000);
 /* poll */
 let first = true, fails = 0;
 async function poll(force){
@@ -857,6 +908,13 @@ async function poll(force){
       $('#campaign').innerHTML = S.campaigns.map(c => `<option value="${c.id}">${c.name.replace(/</g, '')}</option>`).join('');
       setCampaign(S.campaign || S.campaigns[0].id); bindSettings(); $('#caption-warn').hidden = S.can_caption; $('#s-ytpriv').value = S.settings.youtube_privacy || 'public'; first = false; loadYT().then(() => renderClips(true));
     }
+    const cs = S.campaigns.map(c => c.id + ':' + c.name).join('|');
+    if (poll.cs && poll.cs !== cs){
+      const keep = campaign && S.campaigns.some(c => c.id === campaign.id) ? campaign.id : (S.campaign || S.campaigns[0].id);
+      $('#campaign').innerHTML = S.campaigns.map(c => `<option value="${c.id}">${c.name.replace(/</g, '')}</option>`).join('');
+      setCampaign(keep);
+    }
+    poll.cs = cs;
     renderJobs(); renderClips(force === true);
     fails = 0;
   } catch (e) {

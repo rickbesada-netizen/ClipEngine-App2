@@ -31,6 +31,7 @@ import pipeline as P  # noqa: E402
 import youtube as YT  # noqa: E402
 import campaign_import as CI  # noqa: E402
 import kit as KIT  # noqa: E402
+import cloudsync as CS  # noqa: E402
 
 APP = Flask(__name__, static_folder=str(P.APP_DIR / "static"), static_url_path="/static")
 DB_PATH = P.DATA / "db.json"
@@ -42,7 +43,7 @@ if getattr(sys, "frozen", False):
         CAMPAIGNS_PATH.write_text((P.APP_DIR / "campaigns.json").read_text(encoding="utf-8"), encoding="utf-8")
 LOCK = threading.RLock()
 PORT = int(os.environ.get("CLIP_ENGINE_PORT", "5050"))
-APP_VERSION = "1.2.6"
+APP_VERSION = "1.3.0"
 
 DEFAULT_SETTINGS = {
     "clips_per_video": 4, "min_len": 20, "max_len": 45, "layout": "auto", "captions": True,
@@ -83,12 +84,17 @@ def save_db():
         tmp = DB_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(DB, indent=1), encoding="utf-8")
         tmp.replace(DB_PATH)
+    SYNC_WAKE.set()
+
+
+SYNC_WAKE = threading.Event()
 
 
 def write_campaigns_text(text: str, encoding: str = "utf-8"):
     tmp = CAMPAIGNS_PATH.with_suffix(".tmp")
     tmp.write_text(text, encoding=encoding)
     tmp.replace(CAMPAIGNS_PATH)
+    SYNC_WAKE.set()
 
 
 def campaigns() -> list[dict]:
@@ -604,7 +610,7 @@ def thumb_file(name):
 def state():
     try:
         with LOCK:
-            clips = [{k: v for k, v in c.items() if k != "words"} for c in DB["clips"]]
+            clips = [{**{k: v for k, v in c.items() if k != "words"}, "here": clip_path(c).exists()} for c in DB["clips"]]
             return jsonify({"jobs": DB["jobs"][-40:], "clips": clips, "settings": DB["settings"], "campaign": DB.get("campaign"),
                             "campaigns": campaigns(), "can_caption": P.CAN_CAPTION, "now": time.time(),
                             "data_dir": str(P.DATA), "version": APP_VERSION})
@@ -1132,6 +1138,131 @@ def kit_file(cid, name):
     return send_from_directory(KIT.KIT_DIR / Path(cid).name, Path(name).name, as_attachment=request.args.get("download") == "1")
 
 
+# ---------------------------------------------------------------- cloud sync
+SYNC = CS.Sync(P.DATA / "sync.json")
+
+
+def _sync_snapshot() -> dict:
+    with LOCK:
+        snap = {
+            "campaigns": {c["id"]: c for c in campaigns()},
+            "clips": {c["id"]: {k: v for k, v in c.items() if k not in CS.LOCAL_CLIP_FIELDS} for c in DB["clips"]},
+            "settings": {k: v for k, v in DB["settings"].items() if k not in CS.LOCAL_SETTINGS},
+            "accounts": DB.get("accounts", {}),
+        }
+        return json.loads(json.dumps(snap))
+
+
+def _sync_apply(merged: dict, snap: dict):
+    def same(a, b):
+        return CS._h(CS._strip_meta(a)) == CS._h(CS._strip_meta(b))
+
+    def combine(sec, current: dict) -> dict:
+        """merged result, but keep anything that changed here while the sync was talking to the server"""
+        m, sn = merged.get(sec, {}), snap.get(sec, {})
+        out = {}
+        for k, v in current.items():
+            if k not in sn or not same(v, sn[k]):
+                out[k] = v  # new or edited during the sync: keep, it goes up next time
+            elif k in m:
+                out[k] = m[k]
+        for k, v in m.items():
+            if k not in current and k not in sn:
+                out[k] = v  # from another computer
+        return out
+
+    with LOCK:
+        # campaigns
+        cur = {c["id"]: c for c in campaigns()}
+        newc = combine("campaigns", cur)
+        if newc and not same(newc, cur):
+            order = [k for k in cur if k in newc] + [k for k in newc if k not in cur]
+            write_campaigns_text(json.dumps([newc[k] for k in order], indent=2), encoding="utf-8")
+        # clips: keep this computer's own fields; delete files of clips deleted on another computer
+        curc = {c["id"]: c for c in DB["clips"]}
+        view = {k: {kk: vv for kk, vv in c.items() if kk not in CS.LOCAL_CLIP_FIELDS} for k, c in curc.items()}
+        newv = combine("clips", view)
+        clips = []
+        for k, v in newv.items():
+            loc = curc.get(k, {})
+            nc = {**v, **{f: loc[f] for f in CS.LOCAL_CLIP_FIELDS if f in loc}}
+            if loc and loc.get("file") != nc.get("file"):
+                # moved to another campaign on another computer: move this computer's copy too
+                src, dst = clip_path(loc), clip_path(nc)
+                if src.exists() and not dst.exists():
+                    try:
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(src), str(dst))
+                    except OSError:
+                        traceback.print_exc()
+            clips.append(nc)
+        for k, c in curc.items():
+            if k not in newv:
+                for f in (clip_path(c), thumb_path(c)):
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+        clips.sort(key=lambda c: c.get("created", 0), reverse=True)
+        DB["clips"] = clips
+        # settings and accounts
+        curs = {k: v for k, v in DB["settings"].items() if k not in CS.LOCAL_SETTINGS}
+        for k, v in combine("settings", curs).items():
+            DB["settings"][k] = v
+        DB["accounts"] = combine("accounts", DB.get("accounts", {}))
+        tmp = DB_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(DB, indent=1), encoding="utf-8")
+        tmp.replace(DB_PATH)
+
+
+def sync_now():
+    SYNC.run(_sync_snapshot, _sync_apply)
+
+
+def sync_loop():
+    while True:
+        SYNC_WAKE.wait(60)
+        if SYNC_WAKE.is_set():
+            time.sleep(8)  # let a burst of changes settle
+        SYNC_WAKE.clear()
+        if SYNC.signed_in:
+            try:
+                sync_now()
+            except Exception as e:  # noqa: BLE001
+                print("sync:", e, flush=True)
+
+
+@APP.get("/api/sync")
+def sync_status():
+    return jsonify(SYNC.status())
+
+
+@APP.post("/api/sync/login")
+def sync_login():
+    b = request.get_json(force=True) or {}
+    try:
+        SYNC.login(b.get("email", ""), b.get("password", ""), bool(b.get("create")))
+        sync_now()
+    except CS.SyncError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(SYNC.status())
+
+
+@APP.post("/api/sync/now")
+def sync_now_route():
+    try:
+        sync_now()
+    except CS.SyncError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(SYNC.status())
+
+
+@APP.post("/api/sync/logout")
+def sync_logout():
+    SYNC.logout()
+    return jsonify(SYNC.status())
+
+
 def selftest() -> int:
     """Checks every heavy dependency loads. Used by the Windows build to test the exe."""
     import cv2
@@ -1309,6 +1440,8 @@ if __name__ == "__main__":
         traceback.print_exc()
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=watcher, daemon=True).start()
+    threading.Thread(target=sync_loop, daemon=True).start()
+    SYNC_WAKE.set()
     url = f"http://127.0.0.1:{port}"
     from werkzeug.serving import make_server
     srv = make_server("127.0.0.1", port, APP, threaded=True)

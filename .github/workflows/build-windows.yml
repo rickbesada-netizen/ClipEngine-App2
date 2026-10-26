@@ -52,9 +52,21 @@ jobs:
           --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime --collect-all tokenizers
           --collect-all av --collect-all imageio_ffmpeg --collect-all yt_dlp --collect-all yt_dlp_ejs
           --collect-data cv2 --collect-submodules flask --collect-data googleapiclient --hidden-import youtube
-          --hidden-import campaign_import --hidden-import kit --collect-all rapidocr_onnxruntime
+          --hidden-import campaign_import --hidden-import kit --hidden-import cloudsync --collect-all rapidocr_onnxruntime
           --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-data docx --collect-submodules pystray --collect-all gdown --copy-metadata gdown
           app/server.py
+
+      - name: Check the cloud sync service answers
+        shell: pwsh
+        run: |
+          try {
+            Invoke-WebRequest https://buildable-clip-factory.netlify.app/api/sync -Method Post -ContentType "application/json" -Body '{"action":"login","email":"build-check@example.com","password":"not-a-real-account"}' -UseBasicParsing | Out-Null
+            throw "expected 404"
+          } catch {
+            $code = $_.Exception.Response.StatusCode.value__
+            Write-Host "sync service answered $code"
+            if ($code -ne 404) { throw "Sync service is not working (got $code)" }
+          }
 
       - name: Test the exe
         shell: pwsh
