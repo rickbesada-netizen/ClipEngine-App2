@@ -507,6 +507,8 @@ function renderJobs(){
   if (!jobs.length){ box.append(el('p', 'empty', 'Pick videos from the sources on the left, or paste links, then press Find clips. Each video shows its progress here.')); return; }
   jobs.forEach(j => {
     const d = el('div', 'job ' + j.status);
+    const cn = (S.campaigns.find(c => c.id === j.campaign) || {}).name;
+    if (cn) d.append(el('span', 'tag', cn));
     d.append(el('div', 't', j.title || j.url));
     const tr = el('div', 'track'); const i = el('i'); i.style.width = Math.round((j.status === 'done' ? 1 : j.progress || 0) * 100) + '%'; tr.append(i); d.append(tr);
     d.append(el('div', 'm', ({ queued: 'Waiting', running: '', cancelling: 'Stopping…', stopped: '', error: '', done: '' }[j.status] || '') + (j.status === 'queued' ? '' : (j.message || ''))));
