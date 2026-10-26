@@ -15,27 +15,27 @@ jobs:
           cd probe && python3 - <<'PY' 2>&1 | tee status.txt
           import re
           from curl_cffi import requests
-          U = {
-            'wf': 'https://whop.com/workforce/',
-            'wf_exp': 'https://whop.com/workforce/exp_ieyoVFzMHM6BQo/',
-            'wf_post': 'https://whop.com/workforce/exp_ieyoVFzMHM6BQo/post_1CfxHD47wq9DeDyp676W3T',
-            'disc_wf': 'https://whop.com/discover/workforce/',
-            'bounties': 'https://whop.com/bounties/',
-            'cr_app1': 'https://whop.com/contentrewards/exp_B5C5S1vijHGVt9/app/',
-            'cr_app2': 'https://whop.com/contentrewards/exp_KZckYGtrnbujDg/app/',
-            'robots': 'https://whop.com/robots.txt',
-            'sitemap': 'https://whop.com/sitemap.xml',
+          sites = {
+            'vyro': ['https://vyro.com', 'https://vyro.com/campaigns', 'https://app.vyro.com/campaigns', 'https://vyro.com/robots.txt', 'https://vyro.com/sitemap.xml', 'https://app.vyro.com/robots.txt'],
+            'clippingnet': ['https://clipping.net', 'https://clipping.net/campaigns', 'https://clipping.net/dashboard/campaigns', 'https://clipping.net/robots.txt', 'https://clipping.net/sitemap.xml'],
+            'clipaff': ['https://www.clipaffiliates.com', 'https://www.clipaffiliates.com/campaigns', 'https://www.clipaffiliates.com/robots.txt', 'https://www.clipaffiliates.com/sitemap.xml'],
+            'elev8or': ['https://www.elev8or.io/bounty/clipping', 'https://www.elev8or.io/robots.txt', 'https://www.elev8or.io/sitemap.xml'],
+            'promote': ['https://promote.fun', 'https://promote.fun/campaigns', 'https://promote.fun/robots.txt'],
           }
-          for k, u in U.items():
-              try:
-                  r = requests.get(u, impersonate='chrome', timeout=30)
-                  open(k + '.html', 'w').write(r.text)
-                  t = r.text
-                  print(k, r.status_code, len(t), 'final', r.url, '| bounty', t.count('ounty'), 'title', (re.search(r'<title>(.*?)</title>', t) or [None, ''])[1][:80])
-              except Exception as e:
-                  print(k, 'ERR', e)
-          print(open('robots.html').read()[:3000])
-          sm = open('sitemap.html').read(); print('SITEMAP', re.findall(r'<loc>(.*?)</loc>', sm)[:40])
+          n = 0
+          for site, urls in sites.items():
+              for u in urls:
+                  n += 1
+                  try:
+                      r = requests.get(u, impersonate='chrome', timeout=30)
+                      t = r.text
+                      fn = f'{site}_{n}.txt'; open(fn, 'w').write(t)
+                      title = (re.search(r'<title>(.*?)</title>', t, re.S) or [None, ''])[1][:70].strip()
+                      keys = {k: t.lower().count(k) for k in ['cpm', 'budget', 'per 1k', 'campaign', '__next_data__', '__next_f', 'api.']}
+                      apis = sorted(set(re.findall(r'https://[a-z0-9.-]*api[a-z0-9.-]*\.[a-z]+[/\w.-]{0,40}', t)))[:6]
+                      print(fn, r.status_code, len(t), r.url, '|', title, '|', keys, apis)
+                  except Exception as e:
+                      print(site, u, 'ERR', str(e)[:100])
           PY
           cd ..
           git config user.name probe; git config user.email probe@users.noreply.github.com
