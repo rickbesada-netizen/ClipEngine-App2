@@ -293,8 +293,8 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
 
   <section id="tab-discover" hidden>
     <div class="panel" style="margin-bottom:14px">
-      <h2>New campaigns on Whop</h2>
-      <p class="hint">Every live clipping campaign on Whop's Content Rewards: the main list plus each agency's own page (Reach, Clip Farm, Clipping Culture and the rest), checked every 3 hours. To take one on: press <b>Open on Whop</b> and join it there, then <b>Add to Clip Engine</b> sets it up here (rules, hashtags, pay, platforms). Joining stays your click on purpose: it's your Whop account and payouts.</p>
+      <h2>New campaigns on Whop and Vyro</h2>
+      <p class="hint">Every live clipping campaign on Whop's Content Rewards (the main list plus each agency's own page: Reach, Clip Farm, Clipping Culture and the rest) and on Vyro, checked every 3 hours. To take one on: press <b>Open on Whop</b> (or Vyro) and join it there, then <b>Add to Clip Engine</b> sets it up here (rules, hashtags, pay, platforms). Joining stays your click on purpose: it's your account and your payouts.</p>
       <div class="fields" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
         <div class="field"><span class="lbl">Platforms you post on</span>
           <div class="row" id="fd-plats" style="gap:10px">
@@ -307,6 +307,7 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
           <label><input type="checkbox" id="fd-apply"> Hide ones you must apply for</label></div>
       </div>
       <div class="row"><button class="go" id="fd-check" type="button" style="font-size:17px">Check now</button>
+        <label class="lbl" for="fd-src" style="margin:0">From</label><select id="fd-src"><option value="">Every platform</option><option value="whop">Whop (Content Rewards)</option><option value="vyro">Vyro</option></select>
         <label><input type="checkbox" id="fd-all"> Show campaigns that don't match too</label><span class="hint" id="fd-status"></span></div>
     </div>
     <div id="fd-list" class="fd-list"></div>
@@ -955,7 +956,7 @@ async function saveFinder(){
 }
 ['#fd-rate', '#fd-budget', '#fd-pool', '#fd-apply'].forEach(id => $(id).onchange = saveFinder);
 document.querySelectorAll('#fd-plats input').forEach(c => c.onchange = saveFinder);
-$('#fd-all').onchange = () => renderFinder();
+$('#fd-all').onchange = () => renderFinder(); $('#fd-src').onchange = () => renderFinder();
 $('#fd-check').onclick = async () => {
   const b = $('#fd-check'); b.disabled = true; b.textContent = 'Checking...';
   try { await api('/api/finder/start', {}); toast('Checking every agency. This takes about a minute; you can keep working.'); setTimeout(() => loadFinder(false), 3000); }
@@ -973,16 +974,19 @@ function renderFinder(){
   if (!FD) return;
   const box = $('#fd-list'); box.innerHTML = '';
   const live = FD.campaigns.filter(c => c.live !== false && !c.hidden);
-  $('#fd-status').textContent = FD.busy ? (FD.progress || 'Checking...') : FD.error ? 'Last check failed: ' + FD.error : FD.checked ? live.length + ' live campaigns from ' + (FD.agencies || 'all') + ' agencies, ' + live.filter(c => c.match).length + ' match your filters. Checked ' + ago(FD.checked) + ', again every 3 hours.' : 'Not checked yet. Press Check now.';
+  $('#fd-status').textContent = FD.busy ? (FD.progress || 'Checking...') : FD.error ? 'Last check failed: ' + FD.error : FD.checked ? live.length + ' live campaigns (' + live.filter(c => (c.source || 'whop') === 'whop').length + ' on Whop from ' + (FD.agencies || 'all') + ' agencies, ' + live.filter(c => c.source === 'vyro').length + ' on Vyro), ' + live.filter(c => c.match).length + ' match your filters. Checked ' + ago(FD.checked) + ', again every 3 hours.' : 'Not checked yet. Press Check now.';
   const all = $('#fd-all').checked;
-  const list = FD.campaigns.filter(c => !c.hidden && c.live !== false && (all || c.match));
+  const src = $('#fd-src').value;
+  const list = FD.campaigns.filter(c => !c.hidden && c.live !== false && (all || c.match) && (!src || (c.source || 'whop') === src));
   if (!list.length){ box.append(el('p', 'empty', FD.campaigns.length ? 'No campaigns match your filters right now. Lower the minimums, or tick "Show campaigns that don\u2019t match too".' : 'Press Check now to load the campaign list.')); return; }
   list.forEach(c => {
     const d = el('div', 'fd' + (c.match ? '' : ' dim'));
     const tags = el('div', 'tags');
     if (c.new) tags.append(el('span', 'tag st-posted', 'New'));
     if (c.added) tags.append(el('span', 'tag st-submitted', 'In Clip Engine'));
-    tags.append(el('span', 'tag', c.brand || 'Whop'));
+    const site = c.source === 'vyro' ? 'Vyro' : 'Whop';
+    tags.append(el('span', 'tag st-ready', site));
+    if (c.brand) tags.append(el('span', 'tag', c.brand));
     if (c.category) tags.append(el('span', 'tag', c.category));
     if (c.requires_application) tags.append(el('span', 'tag', 'Must apply'));
     (c.platforms || []).forEach(p => tags.append(el('span', 'tag', PL[p] || p)));
@@ -992,7 +996,7 @@ function renderFinder(){
     const br = el('div', 'bar2'); const bi = el('i'); bi.style.width = Math.min(100, c.progress || 0) + '%'; br.append(bi); d.append(br);
     if (c.description) d.append(el('div', 'desc', c.description));
     const row = el('div', 'row');
-    const o = el('a', 'btn', 'Open on Whop'); o.href = c.url; o.target = '_blank'; o.rel = 'noopener'; row.append(o);
+    const o = el('a', 'btn', 'Open on ' + site); o.href = c.url; o.target = '_blank'; o.rel = 'noopener'; row.append(o);
     const a = el('button', 'btn', c.added ? 'Update in Clip Engine' : 'Add to Clip Engine'); a.type = 'button';
     a.onclick = async () => {
       a.disabled = true; a.textContent = 'Reading the rules...';
@@ -1000,7 +1004,7 @@ function renderFinder(){
         const r = await api('/api/finder/import', { id: c.id }, 'POST', 90000);
         document.querySelector('[data-tab=rules]').click();
         fillForm(r.campaign); delete DRAFT.read_rules; delete DRAFT.description;
-        $('#cb-status').textContent = 'From Whop: ' + c.title + '. ' + (r.campaign.read_rules && r.campaign.read_rules.length ? 'Read the rules page too. ' : 'Open it on Whop to read the full rules. ') + 'Check the details, then save.';
+        $('#cb-status').textContent = 'From ' + site + ': ' + c.title + '. ' + (r.campaign.read_rules && r.campaign.read_rules.length ? 'Read the rules page too. ' : 'Open it on ' + site + ' to read the full rules. ') + (c.footage && c.footage.length ? 'Footage is on Frame.io: download it from the link in the rules, then drag it into Find clips. ' : '') + 'Check the details, then save.';
       } catch (e) { toast(e.message); }
       finally { a.disabled = false; a.textContent = c.added ? 'Update in Clip Engine' : 'Add to Clip Engine'; }
     };

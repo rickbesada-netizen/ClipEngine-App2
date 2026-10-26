@@ -180,6 +180,22 @@ def organise_clips():
 
 
 
+def clean_old_captions():
+    """Masks swearing in captions and hooks of clips made before the clean-language setting existed."""
+    if not DB["settings"].get("clean_language", True):
+        return
+    n = 0
+    with LOCK:
+        for c in DB["clips"]:
+            for k in ("caption", "hook"):
+                if c.get(k) and P.has_swear(c[k]):
+                    c[k] = P.clean_text(c[k])
+                    n += 1
+    if n:
+        save_db()
+        print(f"Cleaned swearing from {n} caption(s)/hook(s)", flush=True)
+
+
 def recover_clips():
     """Adds clip videos found in the clips folders that the save file doesn't know about (e.g. after a lost save)."""
     known = {str(Path(c["file"])).lower() for c in DB["clips"]}
@@ -1174,7 +1190,7 @@ def finder_refresh():
     FINDER_STATE["busy"], FINDER_STATE["busy_soon"] = True, False
     try:
         known = (DB.get("finder") or {}).get("agencies", [])
-        items, agencies = FIND.fetch_all(progress=lambda m: FINDER_STATE.__setitem__("msg", m), known_agencies=known)
+        items, agencies, problems = FIND.fetch_everything(progress=lambda m: FINDER_STATE.__setitem__("msg", m), known_agencies=known)
     finally:
         FINDER_STATE["busy"], FINDER_STATE["msg"] = False, ""
     items = [it for it in items if (it.get("budget_left") or 0) > 1]  # out of budget: nothing left to earn
@@ -1182,6 +1198,7 @@ def finder_refresh():
     with LOCK:
         f = DB.setdefault("finder", {"campaigns": {}, "hidden": [], "seen": []})
         f["agencies"] = agencies
+        f["sources"] = sorted({it.get("source", "whop") for it in items})  # sources read successfully this time
         live = set()
         for it in items:
             old = f["campaigns"].get(it["id"], {})
@@ -1190,9 +1207,9 @@ def finder_refresh():
             live.add(it["id"])
         for cid, it in list(f["campaigns"].items()):
             it["live"] = cid in live
-            if not it["live"] and t - it.get("first_seen", t) > 14 * 86400:
-                del f["campaigns"][cid]  # gone from the list for a while: forget it
-        f["checked"], f["error"] = t, ""
+            if not it["live"] and (t - it.get("first_seen", t) > 14 * 86400 or it.get("source", "whop") in f["sources"]):
+                del f["campaigns"][cid]  # ended or out of budget: forget it
+        f["checked"], f["error"] = t, "; ".join(problems)
     save_db()
 
 
@@ -1230,7 +1247,7 @@ def finder_list():
             x["new"] = it["id"] not in seen
             out.append(x)
         out.sort(key=lambda x: (not x.get("live", True), not x["match"], -(x.get("rate") or 0), -(x.get("budget_left") or 0)))
-        return jsonify(campaigns=out, checked=f.get("checked", 0), error=f.get("error", ""), busy=FINDER_STATE["busy"] or FINDER_STATE.get("busy_soon", False),
+        return jsonify(campaigns=out, checked=f.get("checked", 0), error=f.get("error", ""), sources=f.get("sources", []), busy=FINDER_STATE["busy"] or FINDER_STATE.get("busy_soon", False),
                        progress=FINDER_STATE["msg"], agencies=len(f.get("agencies", [])),
                        new=sum(1 for x in out if x["new"] and x["match"] and not x["hidden"] and x.get("live", True) and not x["added"]))
 
@@ -1304,8 +1321,15 @@ def finder_import():
     draft["join_url"] = it["url"]
     if not draft.get("niche") and it.get("category"):
         draft["niche"] = it["category"]
+    site = "Vyro" if it.get("source") == "vyro" else "Whop"
+    if it.get("source") == "vyro":
+        draft["hashtags"] = it.get("hashtags") or draft.get("hashtags", [])
+        draft["rules"] = [ln for ln in it.get("description", "").split("\n") if ln.strip()]
+        draft["sources"] = []  # Vyro footage is on Frame.io: download it there, then drag it into Clip Engine
+        if it.get("min_views"):
+            draft["pay"] += f" · {it['min_views']:,} view minimum per clip"
     if it.get("requires_application"):
-        draft.setdefault("rules", []).insert(0, "You must apply and be accepted on Whop before posting")
+        draft.setdefault("rules", []).insert(0, f"You must apply and be accepted on {site} before posting")
     draft["exists"] = draft["id"] in {c["id"] for c in campaigns()}
     draft["read_rules"] = read_rules
     draft["description"] = it.get("description", "")

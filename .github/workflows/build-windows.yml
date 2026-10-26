@@ -68,8 +68,8 @@ jobs:
             if ($code -ne 404) { throw "Sync service is not working (got $code)" }
           }
 
-      - name: Check the Whop campaign list can be read
-        run: python -c "import sys, collections; sys.path.insert(0, 'app'); import finder; c, a = finder.fetch_all(pause=0.5); live = [x for x in c if (x.get('budget_left') or 0) > 1]; yt = [x for x in live if 'youtube' in x['platforms']]; print('::notice::Whop campaigns found:', len(c), '| with budget left:', len(live), '| accept YouTube:', len(yt), '| agencies read:', len(a)); assert len(live) >= 20"
+      - name: Check the campaign lists can be read (Whop and Vyro)
+        run: python -c "import sys, collections; sys.path.insert(0, 'app'); import finder; c, a, p = finder.fetch_everything(pause=0.5); live = [x for x in c if (x.get('budget_left') or 0) > 1]; n = collections.Counter(x['source'] for x in live); yt = [x for x in live if 'youtube' in x['platforms']]; print('::notice::Campaigns with budget left:', len(live), '| Whop:', n['whop'], '| Vyro:', n['vyro'], '| accept YouTube:', len(yt), '| agencies read:', len(a), '| problems:', p); assert n['whop'] >= 20 and n['vyro'] >= 1"
 
       - name: Test the exe
         shell: pwsh
@@ -93,6 +93,8 @@ jobs:
             try { $r = Invoke-WebRequest http://127.0.0.1:5050/api/state -UseBasicParsing -TimeoutSec 5; if ($r.StatusCode -eq 200) { $ok = $true; break } } catch {}
           }
           if (-not $ok) { Report "App did not start" }
+          $errs = Select-String -Path "dist\ClipEngine data\clip-engine.log" -Pattern "Traceback" -ErrorAction SilentlyContinue
+          if ($errs) { Report "App started but logged an error" }
           # a second launch must hand over to the running copy and exit
           $p2 = Start-Process dist\ClipEngine.exe -PassThru
           if (-not $p2.WaitForExit(90000)) { Report "Second launch kept running instead of handing over" }
