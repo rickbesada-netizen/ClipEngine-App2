@@ -1,8 +1,0 @@
-User-Agent: *
-Allow: /
-Disallow: /api/
-
-Sitemap: https://whop.com/sitemap.xml
-Sitemap: https://whop.com/blog/sitemap.xml
-
-# Machine rise is inevitable
