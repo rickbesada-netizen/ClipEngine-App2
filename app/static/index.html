@@ -294,7 +294,7 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
   <section id="tab-discover" hidden>
     <div class="panel" style="margin-bottom:14px">
       <h2>New campaigns on Whop</h2>
-      <p class="hint">Live clipping campaigns from Whop's public Content Rewards list, checked every 3 hours. To take one on: press <b>Open on Whop</b> and join it there, then <b>Add to Clip Engine</b> sets it up here (rules, hashtags, pay, platforms). Joining stays your click on purpose: it's your Whop account and payouts.</p>
+      <p class="hint">Every live clipping campaign on Whop's Content Rewards: the main list plus each agency's own page (Reach, Clip Farm, Clipping Culture and the rest), checked every 3 hours. To take one on: press <b>Open on Whop</b> and join it there, then <b>Add to Clip Engine</b> sets it up here (rules, hashtags, pay, platforms). Joining stays your click on purpose: it's your Whop account and payouts.</p>
       <div class="fields" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
         <div class="field"><span class="lbl">Platforms you post on</span>
           <div class="row" id="fd-plats" style="gap:10px">
@@ -952,20 +952,22 @@ document.querySelectorAll('#fd-plats input').forEach(c => c.onchange = saveFinde
 $('#fd-all').onchange = () => renderFinder();
 $('#fd-check').onclick = async () => {
   const b = $('#fd-check'); b.disabled = true; b.textContent = 'Checking...';
-  try { FD = await api('/api/finder/refresh', {}, 'POST', 90000); renderFinder(); toast('Campaign list updated'); }
-  catch (e) { toast(e.message); }
-  finally { b.disabled = false; b.textContent = 'Check now'; }
+  try { await api('/api/finder/start', {}); toast('Checking every agency. This takes about a minute; you can keep working.'); setTimeout(() => loadFinder(false), 3000); }
+  catch (e) { toast(e.message); b.disabled = false; b.textContent = 'Check now'; }
 };
 async function loadFinder(opened){
   try { FD = await api('/api/finder'); } catch (e) { return; }
   $('#n-disc').textContent = FD.new ? String(FD.new) : '';
+  const cb = $('#fd-check'); cb.disabled = !!FD.busy; cb.textContent = FD.busy ? 'Checking...' : 'Check now';
+  if (FD.busy) setTimeout(() => loadFinder(false), 3000);
   if (opened){ bindFinder(); renderFinder(); if (FD.new) api('/api/finder/mark', { seen: 'all' }).then(() => { $('#n-disc').textContent = ''; }).catch(() => {}); }
   else if (!$('#tab-discover').hidden) renderFinder();
 }
 function renderFinder(){
   if (!FD) return;
   const box = $('#fd-list'); box.innerHTML = '';
-  $('#fd-status').textContent = FD.error ? 'Last check failed: ' + FD.error : FD.checked ? 'Checked ' + ago(FD.checked) + '. Checks again every 3 hours.' : 'Not checked yet. Press Check now.';
+  const live = FD.campaigns.filter(c => c.live !== false && !c.hidden);
+  $('#fd-status').textContent = FD.busy ? (FD.progress || 'Checking...') : FD.error ? 'Last check failed: ' + FD.error : FD.checked ? live.length + ' live campaigns from ' + (FD.agencies || 'all') + ' agencies, ' + live.filter(c => c.match).length + ' match your filters. Checked ' + ago(FD.checked) + ', again every 3 hours.' : 'Not checked yet. Press Check now.';
   const all = $('#fd-all').checked;
   const list = FD.campaigns.filter(c => !c.hidden && c.live !== false && (all || c.match));
   if (!list.length){ box.append(el('p', 'empty', FD.campaigns.length ? 'No campaigns match your filters right now. Lower the minimums, or tick "Show campaigns that don\u2019t match too".' : 'Press Check now to load the campaign list.')); return; }

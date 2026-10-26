@@ -44,7 +44,7 @@ if getattr(sys, "frozen", False):
         CAMPAIGNS_PATH.write_text((P.APP_DIR / "campaigns.json").read_text(encoding="utf-8"), encoding="utf-8")
 LOCK = threading.RLock()
 PORT = int(os.environ.get("CLIP_ENGINE_PORT", "5050"))
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 
 DEFAULT_SETTINGS = {
     "clips_per_video": 4, "min_len": 20, "max_len": 45, "layout": "auto", "captions": True,
@@ -1165,11 +1165,23 @@ def finder_matches(it: dict, st: dict) -> bool:
     return True
 
 
+FINDER_STATE = {"busy": False, "msg": ""}
+
+
 def finder_refresh():
-    items = FIND.fetch()
+    if FINDER_STATE["busy"]:
+        raise RuntimeError("Already checking. Give it a minute.")
+    FINDER_STATE["busy"], FINDER_STATE["busy_soon"] = True, False
+    try:
+        known = (DB.get("finder") or {}).get("agencies", [])
+        items, agencies = FIND.fetch_all(progress=lambda m: FINDER_STATE.__setitem__("msg", m), known_agencies=known)
+    finally:
+        FINDER_STATE["busy"], FINDER_STATE["msg"] = False, ""
+    items = [it for it in items if (it.get("budget_left") or 0) > 1]  # out of budget: nothing left to earn
     t = time.time()
     with LOCK:
         f = DB.setdefault("finder", {"campaigns": {}, "hidden": [], "seen": []})
+        f["agencies"] = agencies
         live = set()
         for it in items:
             old = f["campaigns"].get(it["id"], {})
@@ -1218,7 +1230,8 @@ def finder_list():
             x["new"] = it["id"] not in seen
             out.append(x)
         out.sort(key=lambda x: (not x.get("live", True), not x["match"], -(x.get("rate") or 0), -(x.get("budget_left") or 0)))
-        return jsonify(campaigns=out, checked=f.get("checked", 0), error=f.get("error", ""),
+        return jsonify(campaigns=out, checked=f.get("checked", 0), error=f.get("error", ""), busy=FINDER_STATE["busy"] or FINDER_STATE.get("busy_soon", False),
+                       progress=FINDER_STATE["msg"], agencies=len(f.get("agencies", [])),
                        new=sum(1 for x in out if x["new"] and x["match"] and not x["hidden"] and x.get("live", True) and not x["added"]))
 
 
@@ -1229,6 +1242,14 @@ def finder_refresh_route():
     except Exception as e:  # noqa: BLE001
         return jsonify(error=f"Couldn't load the campaign list: {str(e)[:200]}"), 400
     return finder_list()
+
+
+@APP.post("/api/finder/start")
+def finder_start():
+    if not FINDER_STATE["busy"]:
+        FINDER_WAKE.set()
+        FINDER_STATE["busy_soon"] = True
+    return jsonify(ok=True)
 
 
 @APP.post("/api/finder/mark")

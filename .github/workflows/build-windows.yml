@@ -69,7 +69,7 @@ jobs:
           }
 
       - name: Check the Whop campaign list can be read
-        run: python -c "import sys; sys.path.insert(0, 'app'); import finder; c = finder.fetch(); print(len(c), 'campaigns, e.g.', c[0]['title']); assert len(c) >= 5"
+        run: python -c "import sys, collections; sys.path.insert(0, 'app'); import finder; c, a = finder.fetch_all(pause=0.5); live = [x for x in c if (x.get('budget_left') or 0) > 1]; yt = [x for x in live if 'youtube' in x['platforms']]; print('::notice::Whop campaigns found:', len(c), '| with budget left:', len(live), '| accept YouTube:', len(yt), '| agencies read:', len(a)); assert len(live) >= 20"
 
       - name: Test the exe
         shell: pwsh
