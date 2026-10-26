@@ -13,33 +13,29 @@ jobs:
           mkdir -p probe
           pip install curl_cffi >/dev/null 2>&1
           cd probe && python3 - <<'PY' 2>&1 | tee status.txt
-          import re, finder
+          import re
           from curl_cffi import requests
           U = {
-            'robots': 'https://contentrewards.com/robots.txt',
-            'sitemap': 'https://contentrewards.com/sitemap.xml',
-            'reach': 'https://contentrewards.com/reach',
-            'cculture': 'https://contentrewards.com/clippingculture',
-            'new': 'https://contentrewards.com/discover?sort=new',
-            'page2': 'https://contentrewards.com/discover?page=2',
-            'whop_cr': 'https://whop.com/contentrewards/',
-            'whop_cc': 'https://whop.com/clippingculture/exp_zeADOv9rOOKk2x/app/',
+            'wf': 'https://whop.com/workforce/',
+            'wf_exp': 'https://whop.com/workforce/exp_ieyoVFzMHM6BQo/',
+            'wf_post': 'https://whop.com/workforce/exp_ieyoVFzMHM6BQo/post_1CfxHD47wq9DeDyp676W3T',
+            'disc_wf': 'https://whop.com/discover/workforce/',
+            'bounties': 'https://whop.com/bounties/',
+            'cr_app1': 'https://whop.com/contentrewards/exp_B5C5S1vijHGVt9/app/',
+            'cr_app2': 'https://whop.com/contentrewards/exp_KZckYGtrnbujDg/app/',
+            'robots': 'https://whop.com/robots.txt',
+            'sitemap': 'https://whop.com/sitemap.xml',
           }
           for k, u in U.items():
               try:
                   r = requests.get(u, impersonate='chrome', timeout=30)
                   open(k + '.html', 'w').write(r.text)
-                  n = len(finder.parse(r.text))
-                  print(k, r.status_code, len(r.text), 'campaigns', n, 'final', r.url)
+                  t = r.text
+                  print(k, r.status_code, len(t), 'final', r.url, '| bounty', t.count('ounty'), 'title', (re.search(r'<title>(.*?)</title>', t) or [None, ''])[1][:80])
               except Exception as e:
                   print(k, 'ERR', e)
-          print(open('robots.html').read())
-          sm = open('sitemap.html').read()
-          locs = re.findall(r'<loc>(.*?)</loc>', sm); print('sitemap locs', len(locs), locs[:15])
-          for l in locs[:8]:
-              if l.endswith('.xml'):
-                  r = requests.get(l, impersonate='chrome', timeout=30); x = re.findall(r'<loc>(.*?)</loc>', r.text)
-                  print('SUB', l, len(x), [y for y in x if 'campaign' in y][:5], x[:5])
+          print(open('robots.html').read()[:3000])
+          sm = open('sitemap.html').read(); print('SITEMAP', re.findall(r'<loc>(.*?)</loc>', sm)[:40])
           PY
           cd ..
           git config user.name probe; git config user.email probe@users.noreply.github.com
