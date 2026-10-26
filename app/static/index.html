@@ -991,9 +991,10 @@ function renderFinder(){
     if (c.requires_application) tags.append(el('span', 'tag', 'Must apply'));
     (c.platforms || []).forEach(p => tags.append(el('span', 'tag', PL[p] || p)));
     d.append(tags, el('h3', '', c.title));
-    d.append(el('div', 'big', c.type === 'cpm' ? (c.rate_label || '?') + ' per 1K views' : c.type === 'pool' ? money(c.budget_total) + ' prize pool' : (c.rate_label || c.type)));
-    d.append(el('div', 'hint', money(c.budget_left) + ' budget left of ' + money(c.budget_total) + (c.creators ? ' \u00b7 ' + c.creators.toLocaleString() + ' clippers' : '')));
-    const br = el('div', 'bar2'); const bi = el('i'); bi.style.width = Math.min(100, c.progress || 0) + '%'; br.append(bi); d.append(br);
+    if (c.partial) d.append(el('div', 'big', 'Pay and budget: see ' + site));
+    else d.append(el('div', 'big', c.type === 'cpm' ? (c.rate_label || '?') + ' per 1K views' : c.type === 'pool' ? money(c.budget_total) + ' prize pool' : (c.rate_label || c.type)));
+    if (!c.partial) d.append(el('div', 'hint', money(c.budget_left) + ' budget left of ' + money(c.budget_total) + (c.creators ? ' \u00b7 ' + c.creators.toLocaleString() + ' clippers' : '')));
+    if (!c.partial){ const br = el('div', 'bar2'); const bi = el('i'); bi.style.width = Math.min(100, c.progress || 0) + '%'; br.append(bi); d.append(br); }
     if (c.description) d.append(el('div', 'desc', c.description));
     const row = el('div', 'row');
     const o = el('a', 'btn', 'Open on ' + site); o.href = c.url; o.target = '_blank'; o.rel = 'noopener'; row.append(o);

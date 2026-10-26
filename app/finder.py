@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from html import unescape as html_unescape
 import time
 import urllib.request
 
@@ -235,22 +236,42 @@ def _vyro_item(c: dict) -> dict | None:
 
 def fetch_vyro(progress=None, pause: float = 1.0) -> list[dict]:
     out: dict = {}
-    page, pages = 1, 1
-    while page <= pages and page <= 30:
-        if progress:
-            progress(f"Checking Vyro (page {page})")
-        data, meta = _vyro_page(_get(f"{VYRO}/campaigns" + (f"?page={page}" if page > 1 else "")))
-        new = 0
-        for c in data:
-            it = _vyro_item(c)
-            if it and it["id"] not in out:
-                out[it["id"]] = it
-                new += 1
-        pages = int(((meta.get("page") or {}).get("totalPages")) or 1)
-        if not new:
-            break  # page number ignored: we've seen everything this way
-        page += 1
+    seen_slugs: set = set()
+    if progress:
+        progress("Checking Vyro")
+    data, _meta = _vyro_page(_get(f"{VYRO}/campaigns"))  # the page number in the address is ignored by Vyro
+    for c in data:
+        if c.get("slug"):
+            seen_slugs.add(c["slug"])
+        it = _vyro_item(c)
+        if it:
+            out[it["id"]] = it
+    # Later pages load in the browser only, so pick up the rest from Vyro's public campaign sitemap.
+    # Their pages only carry the title, so pay and budget show as "see Vyro".
+    try:
+        locs = re.findall(r"<loc>(.*?)</loc>", _get(f"{VYRO}/sitemap/campaigns.xml"))
+    except Exception:  # noqa: BLE001
+        locs = []
+    for loc in locs[:40]:
+        slug = loc.rstrip("/").rsplit("/", 1)[-1]
+        if slug in seen_slugs or not slug:
+            continue
         time.sleep(pause)
+        try:
+            h = _get(loc)
+        except Exception:  # noqa: BLE001
+            continue
+        m = re.search(r'<meta property="og:title" content="Vyro \| (.*?)(?: Campaign)?"', h)
+        if not m:
+            continue
+        title = html_unescape(m.group(1)).strip()
+        out["vyro-" + slug] = {
+            "id": "vyro-" + slug, "source": "vyro", "title": title, "brand": "", "agency": "vyro", "category": "clipping",
+            "type": "", "rate": None, "rate_label": "", "budget_total": None, "budget_left": None, "progress": 0,
+            "platforms": [], "requires_application": False, "verified": True, "creators": None,
+            "description": "Pay, budget and rules are on the campaign's Vyro page.", "thumbnail": "", "created_ms": None,
+            "opens_at": None, "total_views": None, "url": loc, "hashtags": [], "footage": [], "partial": True,
+        }
     return list(out.values())
 
 

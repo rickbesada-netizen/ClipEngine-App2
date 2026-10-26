@@ -1167,14 +1167,14 @@ def _camp_id(name: str) -> str:
 
 def finder_matches(it: dict, st: dict) -> bool:
     plats = st.get("finder_platforms") or []
-    if plats and not any(p in it.get("platforms", []) for p in plats):
+    if plats and it.get("platforms") and not any(p in it["platforms"] for p in plats):
         return False
     if it.get("type") == "cpm":
         if (it.get("rate") or 0) < float(st.get("finder_min_rate") or 0):
             return False
     elif not st.get("finder_pool", True):
         return False
-    if (it.get("budget_left") or 0) < float(st.get("finder_min_budget") or 0):
+    if it.get("budget_left") is not None and it["budget_left"] < float(st.get("finder_min_budget") or 0):
         return False
     if st.get("finder_hide_apply") and it.get("requires_application"):
         return False
@@ -1193,7 +1193,7 @@ def finder_refresh():
         items, agencies, problems = FIND.fetch_everything(progress=lambda m: FINDER_STATE.__setitem__("msg", m), known_agencies=known)
     finally:
         FINDER_STATE["busy"], FINDER_STATE["msg"] = False, ""
-    items = [it for it in items if (it.get("budget_left") or 0) > 1]  # out of budget: nothing left to earn
+    items = [it for it in items if it.get("budget_left") is None or it["budget_left"] > 1]  # out of budget: nothing left to earn
     t = time.time()
     with LOCK:
         f = DB.setdefault("finder", {"campaigns": {}, "hidden": [], "seen": []})
