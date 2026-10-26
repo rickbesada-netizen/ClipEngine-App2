@@ -98,11 +98,69 @@ def ydl_opts(settings: dict, extra: dict | None = None) -> dict:
     return o
 
 
+KICK_CHANNEL_RX = re.compile(
+    r"^https?://(?:www\.)?kick\.com/(?!(?:video|categories|category|search|auth|browse|following)(?:[/?#]|$))([\w-]+)/?(?:(?:videos|clips|about)/?)?(?:[?#].*)?$", re.I)
+
+
+def kick_channel(url: str) -> str | None:
+    """The channel name if url is a Kick channel page (not a single video or clip)."""
+    u = url.strip()
+    if "clip=" in u or "/clips/clip_" in u:
+        return None
+    m = KICK_CHANNEL_RX.match(u)
+    return m.group(1).lower() if m else None
+
+
+def kick_list(slug: str, settings: dict, limit: int = 30) -> list[dict]:
+    """A Kick channel's past streams (newest first), then its most-viewed clips."""
+    from yt_dlp import YoutubeDL
+
+    out: list[dict] = []
+    errs: list[Exception] = []
+    with YoutubeDL(ydl_opts(settings)) as y:
+        ie = y.get_info_extractor("Kick")
+        try:
+            vods = ie._call_api(f"v2/channels/{slug}/videos", slug, note="Listing past streams")
+        except Exception as e:  # noqa: BLE001
+            errs.append(e)
+            vods = []
+        for v in (vods if isinstance(vods, list) else [])[:limit]:
+            uid = (v.get("video") or {}).get("uuid")
+            if not uid:
+                continue
+            ms = v.get("duration") or 0
+            out.append({"url": f"https://kick.com/{slug}/videos/{uid}", "title": v.get("session_title") or "Past stream",
+                        "duration": round(ms / 1000) if ms else None, "id": uid, "kind": "stream"})
+        try:
+            cl = ie._call_api(f"v2/channels/{slug}/clips", slug, note="Listing clips", query={"sort": "view", "time": "all"})
+        except Exception as e:  # noqa: BLE001
+            errs.append(e)
+            cl = {}
+        for c in ((cl or {}).get("clips") or [])[:limit]:
+            if not c.get("id"):
+                continue
+            out.append({"url": f"https://kick.com/{slug}/clips/{c['id']}", "title": c.get("title") or "Clip",
+                        "duration": c.get("duration"), "id": c["id"], "kind": "clip", "views": c.get("view_count") or c.get("views")})
+    if not out and len(errs) == 2:
+        raise RuntimeError(f"Kick didn't answer when listing {slug}'s streams and clips ({str(errs[-1])[:150]}). "
+                           "Try again in a minute, or open the channel's Clips tab and paste a clip link.")
+    return out
+
+
 def list_source(url: str, limit: int, settings: dict) -> list[dict]:
     """Recent videos from a channel / playlist URL (or the single video)."""
     from yt_dlp import YoutubeDL
 
     u = url.strip()
+    slug = kick_channel(u)
+    if slug:
+        items = kick_list(slug, settings, limit)
+        if not items:
+            raise RuntimeError(f"Kick channel {slug} has no past streams or clips to list.")
+        for it in items:
+            if it["kind"] == "clip":
+                it["title"] = f"[clip] {it['title']}"
+        return items
     if re.search(r"youtube\.com/@[^/]+/?$", u):
         u = u.rstrip("/") + "/videos"
     with YoutubeDL(ydl_opts(settings, {"extract_flat": "in_playlist", "playlistend": limit})) as y:
