@@ -82,6 +82,7 @@ h2{font-family:var(--display);font-weight:700;font-size:21px;text-transform:uppe
 .fd .bar2{height:6px;background:var(--line);border-radius:3px;overflow:hidden}.fd .bar2 i{display:block;height:100%;background:var(--accent)}
 .fd .desc{font-size:13px;color:var(--muted);white-space:pre-wrap;max-height:4.2em;overflow:hidden;word-break:break-word}
 .fd .row{flex-wrap:wrap}
+.ytc{display:flex;flex-direction:column;gap:6px}.ytc-row{gap:10px;align-items:center;flex-wrap:wrap}.ytc-row b{min-width:120px}
 .elsewhere{width:190px;max-width:100%;aspect-ratio:9/16;border:1px dashed var(--line);border-radius:6px;display:flex;align-items:center;justify-content:center;text-align:center;padding:12px;font-size:13px;color:var(--muted);box-sizing:border-box}
 .clip video{width:190px;max-width:100%;aspect-ratio:9/16;background:#000;border-radius:6px;object-fit:cover}
 .clip .meta{display:flex;flex-direction:column;gap:8px;min-width:0}
@@ -373,8 +374,9 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
       <div class="panel" style="grid-column:1/-1">
         <h2>Upload to YouTube from Clip Engine</h2>
         <div id="yt-state"></div>
-        <div class="row"><button class="go" id="yt-connect" type="button" style="font-size:17px">Connect YouTube channel</button><button class="btn" id="yt-disconnect" type="button" hidden>Disconnect</button>
+        <div class="row"><span class="lbl" style="margin:0">Main channel</span><button class="go" id="yt-connect" type="button" style="font-size:17px">Connect YouTube channel</button><button class="btn" id="yt-disconnect" type="button" hidden>Disconnect</button>
           <label class="lbl" for="s-ytpriv" style="margin-left:8px">Upload as</label><select id="s-ytpriv"><option value="public">Public</option><option value="unlisted">Unlisted</option><option value="private">Private</option></select></div>
+        <div id="yt-camps"></div>
         <details id="yt-setup"><summary>One-time setup (about 10 minutes, free)</summary>
           <ol class="steps" style="margin-top:10px">
             <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud</a> signed in with the Google account that owns your clip channel, and create a project called <b>Clip Engine</b>.</li>
@@ -426,7 +428,9 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
 
 /* campaign */
 function setCampaign(id){
+  const changed = !campaign || campaign.id !== id;
   campaign = S.campaigns.find(c => c.id === id) || S.campaigns[0];
+  if (changed && typeof loadYT === 'function') loadYT().then(() => { if (S) renderClips(true); });
   $('#campaign').value = campaign.id; $('#pay').textContent = campaign.pay || '';
   const box = $('#sources'); box.innerHTML = '';
   if (campaign.sources.length){
@@ -647,7 +651,7 @@ function clipCard(c){
   const up = el('div', 'row');
   const yu = c.yt_upload || {};
   if (YTS && YTS.connected && c.here !== false){
-    const yb = el('button', 'btn', yu.state === 'uploading' ? 'Uploading to YouTube ' + Math.round((yu.progress || 0) * 100) + '%' : 'Upload to YouTube'); yb.type = 'button';
+    const yb = el('button', 'btn', yu.state === 'uploading' ? 'Uploading to YouTube ' + Math.round((yu.progress || 0) * 100) + '%' : 'Upload to ' + (YTS.channel || 'YouTube')); yb.type = 'button';
     yb.disabled = yu.state === 'uploading';
     yb.onclick = () => api('/api/clips/' + c.id + '/youtube', {}).then(() => { toast('Uploading to YouTube'); poll(true); }).catch(e => toast(e.message));
     up.append(yb);
@@ -837,14 +841,31 @@ async function refreshCampaigns(selectId){
 /* youtube */
 let YTS = null;
 async function loadYT(){
-  try { YTS = await api('/api/youtube'); } catch (e) { return; }
+  try { YTS = await api('/api/youtube' + (campaign ? '?campaign=' + encodeURIComponent(campaign.id) : '')); } catch (e) { return; }
   const st = $('#yt-state'); st.innerHTML = '';
-  if (YTS.connected) st.append(el('p', 'ok-line', 'Connected to ' + (YTS.channel || 'your channel') + '. Each clip now has an Upload to YouTube button.'));
-  else if (YTS.connecting) st.append(el('p', 'hint', 'Waiting for you to approve in the browser tab Google opened…'));
-  else st.append(el('p', 'hint', YTS.has_secret ? 'Ready to connect. Press Connect YouTube channel.' : 'Not set up yet. Follow the one-time setup below.'));
+  if (YTS.main_channel) st.append(el('p', 'ok-line', 'Main channel: ' + YTS.main_channel + '. Campaigns without their own channel upload here.'));
+  else if (!YTS.has_secret) st.append(el('p', 'hint', 'Not set up yet. Follow the one-time setup below.'));
+  else st.append(el('p', 'hint', 'Ready to connect. Press Connect YouTube channel.'));
+  if (YTS.connecting) st.append(el('p', 'hint', 'Waiting for you to approve in the browser tab Google opened. If your Google account has several channels, pick the one you want there.'));
   if (YTS.error) st.append(el('p', 'bad-line', YTS.error));
-  $('#yt-connect').hidden = !!YTS.connected; $('#yt-disconnect').hidden = !YTS.connected;
+  $('#yt-connect').hidden = !!YTS.main_channel; $('#yt-disconnect').hidden = !YTS.main_channel;
   $('#yt-setup').open = !YTS.has_secret;
+  const box = $('#yt-camps'); box.innerHTML = '';
+  if (YTS.has_secret && campaign){
+    box.append(el('span', 'lbl', 'Channel per campaign'));
+    const tbl = el('div', 'ytc');
+    (YTS.campaigns || []).forEach(c => {
+      const row = el('div', 'row ytc-row');
+      row.append(el('b', '', c.name), el('span', c.own ? 'ok-line' : 'hint', c.own ? 'uploads to ' + c.channel : (c.channel ? 'uses the main channel (' + c.channel + ')' : 'uses the main channel (not connected)')));
+      const go = el('button', 'btn', c.own ? 'Change channel' : 'Give it its own channel'); go.type = 'button';
+      go.onclick = () => api('/api/youtube/connect', { campaign: c.id, own: true }).then(() => { toast('Sign in on the Google tab and pick the channel for ' + c.name); setTimeout(loadYT, 1500); }).catch(e => toast(e.message));
+      row.append(go);
+      if (c.own){ const off = el('button', 'btn', 'Use main channel'); off.type = 'button'; off.onclick = () => api('/api/youtube/disconnect', { campaign: c.id, own: true }).then(loadYT); row.append(off); }
+      tbl.append(row);
+    });
+    box.append(tbl);
+    box.append(el('p', 'hint', 'Each campaign can post to its own channel (for example a trading channel for TJR). Make the channels first on YouTube (one Google account can own several), then press Give it its own channel and pick it. Each laptop connects once; sign-ins stay on the laptop.'));
+  }
   if (YTS.connecting) setTimeout(loadYT, 2000);
 }
 $('#yt-file').onchange = async e => {

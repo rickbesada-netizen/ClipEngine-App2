@@ -1037,10 +1037,14 @@ def accounts_save():
 # ---------------------------------------------------------------- YouTube upload
 @APP.get("/api/youtube")
 def yt_status():
+    cid = request.args.get("campaign") or None
     try:
-        return jsonify(YT.status())
+        out = YT.status(cid)
     except Exception as e:  # noqa: BLE001
-        return jsonify({"has_secret": YT.SECRET.exists(), "connected": False, "error": str(e)[:200]})
+        out = {"has_secret": YT.SECRET.exists(), "connected": False, "error": str(e)[:200]}
+    out["campaigns"] = [{"id": c["id"], "name": c["name"], **v} for c in campaigns()
+                        for v in [YT.overview([c["id"]])[c["id"]]]]
+    return jsonify(out)
 
 
 @APP.post("/api/youtube/secret")
@@ -1054,8 +1058,9 @@ def yt_secret():
 
 @APP.post("/api/youtube/connect")
 def yt_connect():
+    body = request.get_json(force=True) or {}
     try:
-        YT.connect_async()
+        YT.connect_async(body.get("campaign") if body.get("own") else None)
     except Exception as e:  # noqa: BLE001
         return jsonify(error=str(e)), 400
     return jsonify(ok=True)
@@ -1063,7 +1068,8 @@ def yt_connect():
 
 @APP.post("/api/youtube/disconnect")
 def yt_disconnect():
-    YT.disconnect()
+    body = request.get_json(force=True) or {}
+    YT.disconnect(body.get("campaign") if body.get("own") else None)
     return jsonify(ok=True)
 
 
@@ -1077,7 +1083,7 @@ def yt_brand():
         if not banner.exists():
             return jsonify(error="That banner file is gone. Make a new set."), 400
     try:
-        r = YT.apply_branding(banner, body.get("description"), body.get("keywords"))
+        r = YT.apply_branding(banner, body.get("description"), body.get("keywords"), camp["id"])
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return jsonify(error=str(e)[:300]), 400
@@ -1102,7 +1108,7 @@ def yt_upload(cid):
     def run():
         try:
             r = YT.upload(clip_path(c), title, c.get("caption", ""), tags, privacy,
-                          lambda f: c["yt_upload"].update(progress=round(f, 3)))
+                          lambda f: c["yt_upload"].update(progress=round(f, 3)), campaign=c["campaign"])
             with LOCK:
                 c["yt_upload"] = {"state": "done", "progress": 1, **r}
                 if r["privacy"] == "public" or privacy != "public":
