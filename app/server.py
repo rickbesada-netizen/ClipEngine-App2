@@ -741,14 +741,18 @@ def friendly_error(e: Exception) -> str:
         return ("YouTube blocked the download and none of your browsers' sign-ins worked. Fix: open Firefox, sign in to YouTube, "
                 "close Firefox, then press Retry. (Chrome, Edge and Brave lock their sign-ins, so Firefox is the reliable one. "
                 "Or use a cookies.txt file in Settings.)")
-    if "login" in low and "instagram" in low or "rate-limit" in low:
-        return "Instagram needs you signed in. Set 'Use cookies from' to the browser where you're logged in to Instagram and retry."
+    if "instagram" in low and ("login" in low or "rate-limit" in low):
+        return ("Instagram only lets signed-in people download reels. One-time fix: install Firefox, sign in to Instagram in it, then press "
+                "Retry (Clip Engine finds the Firefox sign-in by itself). Chrome, Edge and Brave lock their sign-ins, so it has to be Firefox.")
     if "tiktok" in low and ("unexpected response" in low or "unable to extract" in low or "blocked" in low):
         return "TikTok blocked the download. TikTok often stops downloaders: if this is footage you're meant to clip, ask the campaign for the original file, then drag it in."
-    if "instagram" in low and ("login" in low or "rate" in low or "unable" in low or "unexpected" in low):
-        return "Instagram blocked the download. Sign in to Instagram in Firefox, set Settings > Use cookies from > Firefox, then retry. Or ask the campaign for the original file."
+    if "instagram" in low and ("login" in low or "rate" in low or "unable" in low or "unexpected" in low or "not available" in low):
+        return ("Instagram only lets signed-in people download reels. One-time fix: install Firefox, sign in to Instagram in it, then press "
+                "Retry (Clip Engine finds the Firefox sign-in by itself). Chrome, Edge and Brave lock their sign-ins, so it has to be Firefox.")
     if "not currently live" in low or "is offline" in low:
         return "That channel isn't live right now. Paste a link to one of their past streams or clips instead, or press Browse next to the channel."
+    if "unsupported url" in low and re.search(r"(x|twitter)\.com/\w+/?($|\?)", low):
+        return "That's an X profile page, not a video. Open it, pick a post with a video, and paste that post's link (x.com/name/status/...)."
     if "unsupported url" in low:
         return "That site or link type isn't supported. Paste a direct video, VOD or clip link."
     if "private" in low:
@@ -891,6 +895,12 @@ def add_jobs():
     if share:
         return jsonify(error="That's a download page (Frame.io, Dropbox…), not a video. Download the files to your PC first, "
                              "then drag them (or the zip) into Clip Engine. Google Drive links work directly."), 400
+    profiles = [u for u in urls if re.match(r"^https?://(www\.)?(x|twitter)\.com/[\w]+/?(\?.*)?$", u, re.I)
+                or re.match(r"^https?://(www\.)?instagram\.com/(?!reel|reels|p|tv|stories)[\w.]+/?(\?.*)?$", u, re.I)
+                or re.match(r"^https?://(www\.)?tiktok\.com/@[\w.]+/?(\?.*)?$", u, re.I)]
+    if profiles:
+        return jsonify(error=f"{profiles[0]} is a profile page, not a video. Open it, pick a post with a video, and paste that "
+                             "post's link instead (x.com/name/status/..., instagram.com/reel/..., tiktok.com/@name/video/...)."), 400
     made = []
     with LOCK:
         for u in urls:

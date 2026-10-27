@@ -218,13 +218,13 @@ def download(url: str, settings: dict, progress) -> tuple[Path, dict]:
         msg = str(first).lower()
         if not ("sign in" in msg or "not a bot" in msg or "login" in msg or "cookies" in msg):
             raise
-        # YouTube asked for a signed-in browser: try each installed browser's sign-in automatically
+        # the site (YouTube, Instagram...) asked for a signed-in browser: try each installed browser's sign-in automatically
         tried = {(settings.get("cookies_browser") or "none").lower()}
         last = first
         for b in AUTO_BROWSERS:
             if b in tried:
                 continue
-            progress(f"YouTube wants a sign-in, trying your {b.title()} sign-in…")
+            progress(f"The site wants a sign-in, trying your {b.title()} sign-in…")
             try:
                 info, path = attempt({**settings, "cookies_browser": b, "cookies_file": ""})
                 WORKING_BROWSER["name"] = b
