@@ -1320,16 +1320,49 @@ def campaign_zip_import():
             text += f"\n\n{d.stem}\n" + CI.text_from_file(d.name, d.read_bytes())
         except Exception as e:  # noqa: BLE001
             print("zip doc:", d, e, flush=True)
+    nm = zip_campaign_name(f, request.args.get("name") or "")
     if len(text.strip()) >= 30:
         draft = CI.parse(text)
+        if looks_like_code(draft.get("name", "")):
+            draft["name"] = nm
     else:
-        nm = re.sub(r"[-_]+", " ", Path(request.args.get("name") or "Campaign").stem).strip().title()[:40]
-        draft = CI.parse(f"{nm} campaign\n{nm}")
-        draft["name"] = nm
+        draft = CI.parse(f"{nm or 'New'} campaign\n{nm}")
+        draft["name"] = nm  # may be empty: the form then asks for a name
+    draft["id"] = re.sub(r"[^a-z0-9]+", "", draft["name"].lower())[:24] if draft["name"] else ""
     draft["stage"] = token
     draft["exists"] = draft.get("id") in {c["id"] for c in campaigns()}
     return jsonify(campaign=draft, found={"videos": len(res["videos"]), "assets": len(res["assets"]), "docs": len(res["docs"])},
                    read_text=len(text.strip()) >= 30)
+
+
+def looks_like_code(name: str) -> bool:
+    """True for names that are file codes, not names: '4be4854a-5ec9-4fdc-...', 'IMG_2031', 'a1b2c3d4e5'."""
+    n = re.sub(r"[\s_-]+", "", name or "")
+    if not n:
+        return True
+    hexish = sum(ch in "0123456789abcdefABCDEF" for ch in n) / len(n)
+    return (len(n) >= 12 and hexish > 0.85) or bool(re.fullmatch(r"(img|vid|dsc|mov|file|download|untitled)?\d*", n, re.I))
+
+
+def zip_campaign_name(zpath: Path, upload_name: str) -> str:
+    """A sensible campaign name from a zip: its single top folder (e.g. 'CS Land/'), else its file name,
+    unless that's just a code. Empty if nothing usable, so the form asks for a name."""
+    import zipfile
+    cands = []
+    try:
+        with zipfile.ZipFile(zpath) as z:
+            tops = {n.split("/")[0] for n in z.namelist() if "/" in n and not n.startswith("__MACOSX")}
+            if len(tops) == 1:
+                cands.append(next(iter(tops)))
+    except Exception:  # noqa: BLE001
+        pass
+    cands.append(Path(upload_name or zpath.name).stem)
+    for c in cands:
+        c = re.sub(r"[-_]+", " ", c).strip()
+        c = re.sub(r"\s*\(\d+\)$", "", c)
+        if c and not looks_like_code(c):
+            return c[:40]
+    return ""
 
 
 def apply_stage(cid: str, token: str) -> str:

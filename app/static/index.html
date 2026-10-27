@@ -379,7 +379,7 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
       <div class="panel" style="grid-column:1/-1">
         <h2>Upload to YouTube from Clip Engine</h2>
         <div id="yt-state"></div>
-        <div class="row"><span class="lbl" style="margin:0">Main channel</span><button class="go" id="yt-connect" type="button" style="font-size:17px">Connect YouTube channel</button><button class="btn" id="yt-disconnect" type="button" hidden>Disconnect</button>
+        <div class="row"><span class="lbl" style="margin:0">Default channel (optional)</span><button class="btn" id="yt-connect" type="button">Connect a default channel</button><button class="btn" id="yt-disconnect" type="button" hidden>Disconnect</button>
           <label class="lbl" for="s-ytpriv" style="margin-left:8px">Upload as</label><select id="s-ytpriv"><option value="public">Public</option><option value="unlisted">Unlisted</option><option value="private">Private</option></select></div>
         <div id="yt-camps"></div>
         <details id="yt-setup"><summary>One-time setup (about 10 minutes, free)</summary>
@@ -457,6 +457,9 @@ function setCampaign(id){
   $('#platforms').textContent = campaign.platforms.join(', ');
   $('#reqtags').textContent = campaign.hashtags.join(' ') || 'None';
   $('#cur-name').textContent = campaign.name; $('#cur-pay').textContent = campaign.pay || '';
+  const codey = n => { const t = (n || '').replace(/[\s_-]+/g, ''); return t.length >= 12 && (t.match(/[0-9a-f]/gi) || []).length / t.length > 0.85; };
+  let cn = $('#cur-name-warn'); if (!cn){ cn = el('p', 'notice'); cn.id = 'cur-name-warn'; $('#cur-pay').after(cn); }
+  cn.textContent = 'This name came from a file name. Press Edit, type the real campaign name (e.g. CS Land), then Save. Clips, files and settings stay with it.'; cn.hidden = !codey(campaign.name);
   const cs = $('#cur-sources'); cs.innerHTML = ''; (campaign.sources || []).forEach(u => cs.append(el('li', null, u)));
   if (!campaign.sources.length) cs.append(el('li', null, 'None listed'));
   $('#cur-brief').textContent = campaign.brief || ''; $('#cur-brief-box').hidden = !campaign.brief;
@@ -883,6 +886,7 @@ $('#cb-zip').onchange = e => {
     const fd = j.found || {};
     $('#cb-status').textContent = 'Found ' + fd.videos + ' video(s) to clip, ' + fd.assets + ' banner/roll file(s), ' + fd.docs + ' document(s). ' + (j.read_text ? 'Filled in from the brief: check it, then save.' : 'No brief document inside: fill in the details, then save.') + ' Saving adds the files and starts clipping.';
     fillForm(j.campaign);
+    if (!j.campaign.name){ $('#cf-name').placeholder = 'Type the campaign name, e.g. CS Land'; $('#cb-status').textContent += ' The zip had no name in it: type the campaign name first.'; $('#cf-name').focus(); }
   };
   x.onerror = () => { $('#cb-status').textContent = 'Upload failed'; };
   x.send(f);
@@ -916,28 +920,28 @@ let YTS = null;
 async function loadYT(){
   try { YTS = await api('/api/youtube' + (campaign ? '?campaign=' + encodeURIComponent(campaign.id) : '')); } catch (e) { return; }
   const st = $('#yt-state'); st.innerHTML = '';
-  if (YTS.main_channel) st.append(el('p', 'ok-line', 'Main channel: ' + YTS.main_channel + '. Campaigns without their own channel upload here.'));
+  if (YTS.main_channel) st.append(el('p', 'ok-line', 'Default channel: ' + YTS.main_channel + '. Campaigns without their own account upload here.'));
   else if (!YTS.has_secret) st.append(el('p', 'hint', 'Not set up yet. Follow the one-time setup below.'));
-  else st.append(el('p', 'hint', 'Ready to connect. Press Connect YouTube channel.'));
-  if (YTS.connecting) st.append(el('p', 'hint', 'Waiting for you to approve in the browser tab Google opened. If your Google account has several channels, pick the one you want there.'));
+  else st.append(el('p', 'hint', 'Ready. Connect each campaign to its own Google account below (a default channel is optional).'));
+  if (YTS.connecting) st.append(el('p', 'hint', 'Waiting for you in the Google tab that opened: sign in with the right Google account (use "Use another account" for a different client), allow access, and pick the channel if it asks.'));
   if (YTS.error) st.append(el('p', 'bad-line', YTS.error));
   $('#yt-connect').hidden = !!YTS.main_channel; $('#yt-disconnect').hidden = !YTS.main_channel;
   $('#yt-setup').open = !YTS.has_secret;
   const box = $('#yt-camps'); box.innerHTML = '';
   if (YTS.has_secret && campaign){
-    box.append(el('span', 'lbl', 'Channel per campaign'));
+    box.append(el('span', 'lbl', 'Each campaign\u2019s own Google account and channel'));
     const tbl = el('div', 'ytc');
     (YTS.campaigns || []).forEach(c => {
       const row = el('div', 'row ytc-row');
-      row.append(el('b', '', c.name), el('span', c.own ? 'ok-line' : 'hint', c.own ? 'uploads to ' + c.channel : (c.channel ? 'uses the main channel (' + c.channel + ')' : 'uses the main channel (not connected)')));
-      const go = el('button', 'btn', c.own ? 'Change channel' : 'Give it its own channel'); go.type = 'button';
-      go.onclick = () => api('/api/youtube/connect', { campaign: c.id, own: true }).then(() => { toast('Sign in on the Google tab and pick the channel for ' + c.name); setTimeout(loadYT, 1500); }).catch(e => toast(e.message));
+      row.append(el('b', '', c.name), el('span', c.own ? 'ok-line' : 'hint', c.own ? 'uploads to ' + c.channel : (c.channel ? 'not connected yet, so it uses the default channel (' + c.channel + ')' : 'not connected yet')));
+      const go = el('button', c.own ? 'btn' : 'go', c.own ? 'Change account' : 'Connect its Google account'); if (!c.own) go.style.fontSize = '15px'; go.type = 'button';
+      go.onclick = () => api('/api/youtube/connect', { campaign: c.id, own: true }).then(() => { toast('Sign in on the Google tab with ' + c.name + '\u2019s Google account'); setTimeout(loadYT, 1500); }).catch(e => toast(e.message));
       row.append(go);
-      if (c.own){ const off = el('button', 'btn', 'Use main channel'); off.type = 'button'; off.onclick = () => api('/api/youtube/disconnect', { campaign: c.id, own: true }).then(loadYT); row.append(off); }
+      if (c.own){ const off = el('button', 'btn', 'Disconnect'); off.type = 'button'; off.onclick = () => api('/api/youtube/disconnect', { campaign: c.id, own: true }).then(loadYT); row.append(off); }
       tbl.append(row);
     });
     box.append(tbl);
-    box.append(el('p', 'hint', 'Each campaign can post to its own channel (for example a trading channel for TJR). Make the channels first on YouTube (one Google account can own several), then press Give it its own channel and pick it. Each laptop connects once; sign-ins stay on the laptop.'));
+    box.append(el('p', 'hint', 'Each campaign posts to its own client\u2019s Google account. Press Connect its Google account, then on Google\u2019s page choose "Use another account" and sign in with that client\u2019s Google account (any Google account works, it does not need to be yours). Google may say the app isn\u2019t verified: press Advanced, then Go to Clip Engine. You only do the Google Cloud setup below once; every client account uses it. Each laptop connects once.'));
   }
   if (YTS.connecting) setTimeout(loadYT, 2000);
 }
