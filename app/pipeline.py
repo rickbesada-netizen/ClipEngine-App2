@@ -81,7 +81,7 @@ def probe(path: Path) -> dict:
     rot = re.search(r"rotation of (-?\d+)", txt) or re.search(r"rotate\s*:\s*(-?\d+)", txt)
     if rot and abs(int(rot.group(1))) in (90, 270):
         w, h = h, w
-    return {"w": w, "h": h, "duration": dur}
+    return {"w": w, "h": h, "duration": dur, "audio": bool(re.search(r"Stream #.*Audio:", txt))}
 
 
 # ---------------------------------------------------------------- sources
@@ -275,9 +275,9 @@ def drive_import(url: str, dest: Path, progress, cancel) -> list[Path]:
     try:
         if "/folders/" in url:
             files = gdown.download_folder(url=url, output=str(dest), skip_download=True, quiet=True, use_cookies=False)
-            vids = [f for f in (files or []) if str(f.path).lower().endswith(VIDEO_EXT)]
+            vids = [f for f in (files or []) if str(f.path).lower().endswith(VIDEO_EXT + (".zip",) + IMAGE_EXT)]
             if not vids:
-                raise RuntimeError("That Google Drive folder has no video files in it (or they're inside sub-folders it couldn't open).")
+                raise RuntimeError("That Google Drive folder has no videos, zips or images in it (or they're inside sub-folders it couldn't open).")
             for i, f in enumerate(vids, 1):
                 if cancel():
                     raise Cancelled()
@@ -301,6 +301,141 @@ def drive_import(url: str, dest: Path, progress, cancel) -> list[Path]:
         raise RuntimeError("Couldn't download from that Google Drive link. It's probably not shared publicly. Fix: open it in Google Drive, "
                            "select the videos, press Download, then drag the downloaded zip or videos into Clip Engine. (" + msg[:120] + ")") from e
     return [g for g in got if g.exists() and g.stat().st_size > 0]
+
+
+IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp")
+DOC_EXT = (".pdf", ".docx", ".txt", ".md")
+DIRECT_RX = re.compile(r"^https?://\S+?\.(zip|mp4|mov|mkv|webm|m4v|png|jpe?g|webp)(\?\S*)?$", re.I)
+ASSET_VIDEO_RX = re.compile(r"(mid[\s_-]?roll|post[\s_-]?roll|pre[\s_-]?roll|outro|intro|end[\s_-]?card|endscreen|bumper|banner|overlay|logo|sting|transition)", re.I)
+BANNER_RX = re.compile(r"(banner|overlay|logo|watermark|lower[\s_-]?third|cta|bar)", re.I)
+
+
+def is_asset_video(name: str) -> bool:
+    return bool(ASSET_VIDEO_RX.search(Path(name).stem))
+
+
+def direct_download(url: str, dest: Path, progress, cancel) -> Path:
+    """Downloads a direct file link (a .zip or video on any site, e.g. a campaign's reference materials)."""
+    import urllib.parse
+    import urllib.request
+
+    dest.mkdir(parents=True, exist_ok=True)
+    name = Path(urllib.parse.unquote(urllib.parse.urlparse(url).path)).name or "download.zip"
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", name)
+    out = dest / name
+    k = 2
+    while out.exists():
+        out = dest / f"{Path(name).stem} ({k}){Path(name).suffix}"; k += 1
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ClipEngine"})
+    with urllib.request.urlopen(req, timeout=60) as r, open(out, "wb") as fh:
+        total = int(r.headers.get("content-length") or 0)
+        got = 0
+        while True:
+            if cancel():
+                fh.close(); out.unlink(missing_ok=True)
+                raise Cancelled()
+            chunk = r.read(1024 * 1024)
+            if not chunk:
+                break
+            fh.write(chunk); got += len(chunk)
+            if total:
+                progress(f"Downloading {name} {got / total * 100:.0f}%", 0.8 * got / total)
+            else:
+                progress(f"Downloading {name} ({got // 1048576} MB)", 0.4)
+    if out.stat().st_size == 0:
+        out.unlink(missing_ok=True)
+        raise RuntimeError("That link downloaded an empty file.")
+    return out
+
+
+def unpack(paths: list[Path], footage_dir: Path, assets_dir: Path) -> dict:
+    """Sorts downloaded files: videos to clip go to footage_dir; images, and videos named like a banner,
+    midroll, postroll or outro go to assets_dir; documents (briefs) to assets_dir/docs. Zips (even zips
+    inside zips) are opened. Returns {"videos": [...], "assets": [...], "docs": [...]}."""
+    import zipfile
+
+    out = {"videos": [], "assets": [], "docs": []}
+    footage_dir.mkdir(parents=True, exist_ok=True)
+    assets_dir.mkdir(parents=True, exist_ok=True)
+
+    def place(name: str, folder: Path) -> Path:
+        folder.mkdir(parents=True, exist_ok=True)
+        t = folder / name
+        k = 2
+        while t.exists():
+            t = folder / f"{Path(name).stem} ({k}){Path(name).suffix}"; k += 1
+        return t
+
+    def kind(name: str) -> str | None:
+        low = name.lower()
+        if low.endswith(VIDEO_EXT):
+            return "assets" if is_asset_video(name) else "videos"
+        if low.endswith(IMAGE_EXT):
+            return "assets"
+        if low.endswith(DOC_EXT):
+            return "docs"
+        if low.endswith(".zip"):
+            return "zip"
+        return None
+
+    def take_file(f: Path):
+        k = kind(f.name)
+        if k == "zip":
+            take_zip(f)
+            f.unlink(missing_ok=True)
+        elif k == "videos":
+            if f.parent.resolve() != footage_dir.resolve():
+                t = place(f.name, footage_dir); shutil.move(str(f), str(t)); f = t
+            out["videos"].append(f)
+        elif k in ("assets", "docs"):
+            folder = assets_dir if k == "assets" else assets_dir / "docs"
+            t = place(f.name, folder); shutil.move(str(f), str(t)); out[k].append(t)
+
+    def take_zip(zpath: Path, depth: int = 0):
+        with zipfile.ZipFile(zpath) as z:
+            for info in z.infolist():
+                name = Path(info.filename).name
+                if info.is_dir() or name.startswith(("._", ".")) or "__MACOSX" in info.filename:
+                    continue
+                k = kind(name)
+                if not k:
+                    continue
+                if k == "zip":
+                    if depth < 2:
+                        tmp = place(name, assets_dir / "_tmp")
+                        with z.open(info) as src, open(tmp, "wb") as fh:
+                            shutil.copyfileobj(src, fh, 4 * 1024 * 1024)
+                        take_zip(tmp, depth + 1)
+                        tmp.unlink(missing_ok=True)
+                    continue
+                folder = footage_dir if k == "videos" else assets_dir if k == "assets" else assets_dir / "docs"
+                t = place(name, folder)
+                with z.open(info) as src, open(t, "wb") as fh:
+                    shutil.copyfileobj(src, fh, 4 * 1024 * 1024)
+                out[k].append(t)
+
+    for pth in paths:
+        if pth.exists():
+            take_file(pth)
+    shutil.rmtree(assets_dir / "_tmp", ignore_errors=True)
+    return out
+
+
+def pick_branding(assets: list[Path]) -> dict:
+    """Best guesses for a campaign's banner image and postroll video from its asset files."""
+    imgs = [a for a in assets if a.suffix.lower() in IMAGE_EXT]
+    vids = [a for a in assets if a.suffix.lower() in VIDEO_EXT]
+    banner = next((a for a in imgs if BANNER_RX.search(a.stem)), None)
+    if not banner:
+        try:
+            from PIL import Image
+            wide = [a for a in imgs if (lambda s: s[0] >= 2.5 * s[1])(Image.open(a).size)]
+            banner = wide[0] if wide else None
+        except Exception:  # noqa: BLE001
+            banner = None
+    post = next((a for a in vids if re.search(r"post[\s_-]?roll|outro|end[\s_-]?card|endscreen", a.stem, re.I)), None) \
+        or next((a for a in vids if re.search(r"mid[\s_-]?roll", a.stem, re.I)), None)
+    return {"banner": banner.name if banner else "", "postroll": post.name if post else ""}
 
 
 def extract_videos_from_zip(zpath: Path, dest: Path) -> list[Path]:
@@ -761,7 +896,7 @@ def ass_escape(s: str) -> str:
     return s.replace("\\", "").replace("{", "(").replace("}", ")").replace("\n", " ")
 
 
-def build_ass(words: list[dict], a: float, b: float, margin_v: int, hook: str | None, style: dict, clean: bool = True) -> str:
+def build_ass(words: list[dict], a: float, b: float, margin_v: int, hook: str | None, style: dict, clean: bool = True, hook_margin: int = 150) -> str:
     size = int(style.get("size", 96))
     upper = style.get("upper", True)
     hi = style.get("highlight", "&H00E5FF&")
@@ -775,7 +910,7 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Cap,Poppins,{size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,7,2,2,70,70,{margin_v},1
-Style: Hook,Poppins,66,&H00111111,&H00FFFFFF,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,0,0,3,18,0,8,90,90,150,1
+Style: Hook,Poppins,66,&H00111111,&H00FFFFFF,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,0,0,3,18,0,8,90,90,{hook_margin},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -833,22 +968,45 @@ def render_clip(src: Path, info: dict, clip: dict, words: list[dict], settings: 
         shutil.copytree(FONT_DIR, fonts)
     captions = settings.get("captions", True) and CAN_CAPTION
     hook = clip.get("hook") if settings.get("hook_overlay", True) else None
+    banner = Path(settings["banner_path"]) if settings.get("banner_path") and Path(settings["banner_path"]).exists() else None
+    bpos = settings.get("banner_pos", "top")
+    hook_margin = 150
+    extra_in = []
+    if banner and bpos == "bottom":
+        margin += 300  # lift captions above the banner
+    elif banner:
+        hook_margin = 340  # hook title sits under the banner
     final = "[v]"
     if captions or hook:
-        (work / "subs.ass").write_text(build_ass(words if captions else [], a, b, margin, hook, settings.get("caption_style", {}), settings.get("clean_language", True)), encoding="utf-8")
+        (work / "subs.ass").write_text(build_ass(words if captions else [], a, b, margin, hook, settings.get("caption_style", {}),
+                                                 settings.get("clean_language", True), hook_margin), encoding="utf-8")
         vf += ";[v]ass=subs.ass:fontsdir=fonts[vo]"
         final = "[vo]"
+    if banner:
+        shutil.copy(banner, work / ("banner" + banner.suffix.lower()))
+        extra_in = ["-loop", "1", "-i", "banner" + banner.suffix.lower()]
+        y = "40" if bpos != "bottom" else "H-h-60"
+        vf += (f";[1:v]scale=w=940:h=260:force_original_aspect_ratio=decrease,format=rgba[bn];"
+               f"{final}[bn]overlay=(W-w)/2:{y}:shortest=1[vb]")
+        final = "[vb]"
     af = "loudnorm=I=-14:TP=-1.5:LRA=11"
     if settings.get("mute_swears", True):
         mutes = swear_spans(words, a, b)
         if mutes:
             af = ",".join(f"volume=enable='between(t,{x:.2f},{y:.2f})':volume=0" for x, y in mutes) + "," + af
-    cmd = [FFMPEG, "-y", "-ss", f"{a:.2f}", "-i", str(src), "-t", f"{b - a:.2f}",
+    cmd = [FFMPEG, "-y", "-ss", f"{a:.2f}", "-i", str(src), *extra_in, "-t", f"{b - a:.2f}",
            "-filter_complex", vf, "-map", final, "-map", "0:a?",
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", "30",
            "-af", af, "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
            "-movflags", "+faststart", str(out_path)]
-    run(cmd, cwd=work)
+    post = Path(settings["postroll_path"]) if settings.get("postroll_path") and Path(settings["postroll_path"]).exists() else None
+    if post:
+        main = work / "main.mp4"
+        cmd[-1] = str(main)
+        run(cmd, cwd=work)
+        append_video(main, post, out_path, work)
+    else:
+        run(cmd, cwd=work)
     thumb = thumb or out_path.with_suffix(".jpg")
     try:
         run([FFMPEG, "-y", "-ss", "1.0", "-i", str(out_path), "-frames:v", "1", "-vf", "scale=360:-2", str(thumb)])
@@ -856,6 +1014,24 @@ def render_clip(src: Path, info: dict, clip: dict, words: list[dict], settings: 
         pass
     shutil.rmtree(work, ignore_errors=True)
     return {"layout": layout, "faces_found": len(faces), "captions": bool(captions)}
+
+
+def append_video(main: Path, extra: Path, out: Path, work: Path):
+    """main (1080x1920) followed by extra (a campaign's postroll), fitted to 1080x1920, with sound on both parts."""
+    mi, ei = probe(main), probe(extra)
+    parts = []
+    for idx, inf in ((0, mi), (1, ei)):
+        v = (f"[{idx}:v]scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=decrease,pad={OUT_W}:{OUT_H}:(ow-iw)/2:(oh-ih)/2:color=black,"
+             f"setsar=1,fps=30,format=yuv420p[v{idx}]")
+        if inf.get("audio"):
+            au = f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo[a{idx}]"
+        else:
+            au = f"anullsrc=r=48000:cl=stereo,atrim=0:{max(0.1, inf['duration']):.2f}[a{idx}]"
+        parts += [v, au]
+    fc = ";".join(parts) + ";[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]"
+    run([FFMPEG, "-y", "-i", str(main), "-i", str(extra), "-filter_complex", fc, "-map", "[v]", "-map", "[a]",
+         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", "30",
+         "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", str(out)], cwd=work)
 
 
 def caption_text(hook: str, campaign: dict) -> str:

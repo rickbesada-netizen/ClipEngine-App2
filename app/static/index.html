@@ -82,6 +82,7 @@ h2{font-family:var(--display);font-weight:700;font-size:21px;text-transform:uppe
 .fd .bar2{height:6px;background:var(--line);border-radius:3px;overflow:hidden}.fd .bar2 i{display:block;height:100%;background:var(--accent)}
 .fd .desc{font-size:13px;color:var(--muted);white-space:pre-wrap;max-height:4.2em;overflow:hidden;word-break:break-word}
 .fd .row{flex-wrap:wrap}
+.brand-box{display:flex;flex-direction:column;gap:8px}.brand-box .row{gap:8px;align-items:center;flex-wrap:wrap}.brand-prev{max-width:100%;max-height:90px;object-fit:contain;align-self:flex-start;border:1px solid var(--line);border-radius:4px;background:#222}
 .ytc{display:flex;flex-direction:column;gap:6px}.ytc-row{gap:10px;align-items:center;flex-wrap:wrap}.ytc-row b{min-width:120px}
 .elsewhere{width:190px;max-width:100%;aspect-ratio:9/16;border:1px dashed var(--line);border-radius:6px;display:flex;align-items:center;justify-content:center;text-align:center;padding:12px;font-size:13px;color:var(--muted);box-sizing:border-box}
 .clip video{width:190px;max-width:100%;aspect-ratio:9/16;background:#000;border-radius:6px;object-fit:cover}
@@ -164,7 +165,7 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
           <div class="pick-list" id="pick-list"></div>
         </div>
         <label class="lbl" for="urls">Links or files, one per line</label>
-        <div class="drop" id="dropzone" tabindex="0">Drag videos or a .zip here, paste a Google Drive folder link below, or <button class="btn" id="pick-files" type="button">Choose video files on this PC…</button><input type="file" id="file-in" accept="video/*,.mp4,.mov,.mkv,.webm,.m4v,.avi,.zip" multiple hidden></div>
+        <div class="drop" id="dropzone" tabindex="0">Drag videos, a .zip or a banner image here, paste Google Drive or zip links below, or <button class="btn" id="pick-files" type="button">Choose video files on this PC…</button><input type="file" id="file-in" accept="video/*,.mp4,.mov,.mkv,.webm,.m4v,.avi,.zip,image/*" multiple hidden></div>
         <div class="row" id="upload-row" hidden><div class="track" style="flex:1"><i id="upload-bar"></i></div><span class="mono" id="upload-msg"></span></div>
         <div class="row" hidden><span class="hint">For campaigns that send footage to download (Frame.io, Google Drive, Dropbox): download it first, then choose the files.</span></div>
         <textarea id="urls" rows="6" class="mono" placeholder="https://www.youtube.com/watch?v=...&#10;https://kick.com/tjr/videos/...&#10;C:\Users\you\Videos\stream.mp4"></textarea>
@@ -259,6 +260,7 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
         <div class="field"><label class="lbl" for="cb-file">Upload the brief (PDF, Word, screenshot or text)</label><input type="file" id="cb-file" accept=".pdf,.docx,.txt,.md,.html,.htm,.png,.jpg,.jpeg,.webp"></div>
         <div class="field"><label class="lbl" for="cb-url">Or paste a link: Google Doc or campaign page</label>
           <div class="row"><input type="text" id="cb-url" class="mono" style="flex:1;min-width:0" placeholder="https://docs.google.com/document/d/..."><button class="btn" id="cb-url-go" type="button">Read link</button></div></div>
+        <div class="field"><label class="lbl" for="cb-zip">Or upload the campaign's zip (brief, banner, footage in one)</label><input type="file" id="cb-zip" accept=".zip"></div>
         <details><summary>Or paste the text</summary><textarea id="cb-text" rows="6" style="margin-top:8px"></textarea><button class="btn" id="cb-text-go" type="button" style="margin-top:6px">Read text</button></details>
         <span class="mono" id="cb-status"></span>
         <div id="cb-form" hidden>
@@ -287,6 +289,9 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
         <span class="lbl">Post on</span><p id="platforms" style="margin:0"></p>
         <span class="lbl">Required hashtags</span><p class="mono" id="reqtags" style="margin:0"></p>
         <span class="lbl">Clip from</span><ul class="rules mono" id="cur-sources"></ul>
+        <span class="lbl">Branding on every clip</span>
+        <div id="brand-box" class="brand-box"></div>
+        <div class="row"><input type="file" id="brand-file" accept="image/*,video/*,.zip" hidden><button class="btn" id="brand-add" type="button">Add banner, roll video or zip...</button><span class="hint">For campaigns that require their banner, logo, midroll or postroll in every clip.</span></div>
         <details id="cur-brief-box"><summary>Original brief</summary><pre class="brief" id="cur-brief"></pre></details>
       </div>
     </div>
@@ -422,6 +427,7 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   ['make', 'clips', 'accounts', 'rules', 'discover', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== b.dataset.tab);
   if (b.dataset.tab === 'settings') { loadOllama(); loadYT(); loadClipsFolder(); }
   if (b.dataset.tab === 'discover') { loadFinder(true); }
+  if (b.dataset.tab === 'rules') { loadBranding(); }
   if (b.dataset.tab === 'accounts') loadAccounts();
   if (b.dataset.tab === 'clips') loadWatch();
 });
@@ -438,10 +444,13 @@ function setCampaign(id){
     campaign.sources.forEach(u => {
       const r = el('div', 'src-row'); r.append(el('code', null, u));
       const single = /\/(video|photo|reel|reels|p|shorts)\/|watch\?v=|youtu\.be\//i.test(u);
-      if (single){ const o = el('a', 'btn', 'Open'); o.href = u; o.target = '_blank'; o.rel = 'noopener'; o.title = 'A single post (often an example from the brief). Opens it to watch.'; r.append(o); }
+      if (isBundle(u)){ const g = el('button', 'btn', 'Get'); g.type = 'button'; g.title = 'Downloads everything in it: videos get clipped, banners and roll videos are kept for this campaign'; g.onclick = () => getFootage([u]); r.append(g); }
+      else if (single){ const o = el('a', 'btn', 'Open'); o.href = u; o.target = '_blank'; o.rel = 'noopener'; o.title = 'A single post (often an example from the brief). Opens it to watch.'; r.append(o); }
       else { const b = el('button', 'btn', 'Browse'); b.type = 'button'; b.onclick = () => browse(u, b); r.append(b); }
       box.append(r);
     });
+    const bundles = campaign.sources.filter(isBundle);
+    if (bundles.length > 1){ const all = el('button', 'go', 'Get all ' + bundles.length + ' footage links'); all.type = 'button'; all.style.fontSize = '16px'; all.onclick = () => getFootage(bundles); box.append(all); }
   }
   const rl = $('#rules'); rl.innerHTML = ''; campaign.rules.forEach(x => rl.append(el('li', null, x)));
   const lf = $('#lookfor'); lf.innerHTML = ''; campaign.look_for.forEach(x => lf.append(el('li', null, x)));
@@ -451,9 +460,56 @@ function setCampaign(id){
   const cs = $('#cur-sources'); cs.innerHTML = ''; (campaign.sources || []).forEach(u => cs.append(el('li', null, u)));
   if (!campaign.sources.length) cs.append(el('li', null, 'None listed'));
   $('#cur-brief').textContent = campaign.brief || ''; $('#cur-brief-box').hidden = !campaign.brief;
+  if (!$('#tab-rules').hidden && typeof loadBranding === 'function') loadBranding();
 }
 $('#campaign').onchange = e => { setCampaign(e.target.value); api('/api/settings', { campaign: campaign.id }); if (!$('#tab-accounts').hidden) loadAccounts(); loadWatch(); renderClips(true); };
 
+
+const isBundle = u => /(drive|docs)\.google\.com\//i.test(u) || /^https?:\/\/\S+?\.(zip|mp4|mov|mkv|webm|m4v|png|jpe?g|webp)(\?\S*)?$/i.test(u);
+async function getFootage(urls){
+  const settings = { clips_per_video: +$('#q-n').value || 4, min_len: +$('#q-min').value || 20, max_len: +$('#q-max').value || 45, layout: $('#q-layout').value };
+  try { await api('/api/jobs', { urls, campaign: campaign.id, settings }); toast('Getting ' + urls.length + ' link' + (urls.length > 1 ? 's' : '') + '. Videos get clipped; banners and roll videos are saved to this campaign.'); poll(); }
+  catch (e) { toast(e.message); }
+}
+
+/* campaign branding */
+let brandSeq = 0;
+async function loadBranding(){
+  if (!campaign) return;
+  const seq = ++brandSeq, cid = campaign.id;
+  let r; try { r = await api('/api/campaigns/' + encodeURIComponent(cid) + '/assets'); } catch (e) { return; }
+  if (seq !== brandSeq || !campaign || campaign.id !== cid) return;  // a newer refresh is on its way
+  const box = $('#brand-box'); box.innerHTML = '';
+  const imgs = r.files.filter(f => f.kind === 'image'), vids = r.files.filter(f => f.kind === 'video');
+  const save = body => api('/api/campaigns/' + encodeURIComponent(campaign.id) + '/branding', body).then(async () => { toast('Saved. Applies to clips made from now on.'); const keep = campaign.id; S = await api('/api/state'); campaign = S.campaigns.find(c => c.id === keep) || campaign; loadBranding(); }).catch(e => toast(e.message));
+  const row1 = el('div', 'row');
+  const sel = el('select'); sel.id = 'brand-banner';
+  sel.append(new Option('No banner', ''));
+  imgs.forEach(f => sel.append(new Option(f.name, f.name)));
+  sel.value = r.banner || ''; sel.onchange = () => save({ banner: sel.value });
+  const pos = el('select'); [['top', 'Banner at the top'], ['bottom', 'Banner at the bottom'], ['off', 'Banner off']].forEach(([v, t]) => pos.append(new Option(t, v)));
+  pos.value = r.banner_pos || 'top'; pos.onchange = () => save({ banner_pos: pos.value });
+  row1.append(el('span', 'lbl', 'Banner'), sel, pos); box.append(row1);
+  if (r.banner){ const im = el('img', 'brand-prev'); im.src = '/campaign-assets/' + encodeURIComponent(campaign.id) + '/' + encodeURIComponent(r.banner); im.alt = 'Banner'; box.append(im); }
+  const row2 = el('div', 'row');
+  const ps = el('select'); ps.append(new Option('No end video', '')); vids.forEach(f => ps.append(new Option(f.name, f.name)));
+  ps.value = r.postroll || ''; ps.onchange = () => save({ postroll: ps.value });
+  row2.append(el('span', 'lbl', 'End video (postroll)'), ps); box.append(row2);
+  if (r.files.length){
+    const det = el('details'); det.append(el('summary', null, r.files.length + ' file' + (r.files.length > 1 ? 's' : '') + ' saved for this campaign'));
+    r.files.forEach(f => { const ln = el('div', 'row'); ln.append(el('span', 'mono', f.name)); const d = el('button', 'btn', 'Remove'); d.type = 'button'; d.onclick = () => api('/api/campaigns/' + encodeURIComponent(campaign.id) + '/assets/' + encodeURIComponent(f.name), null, 'DELETE').then(loadBranding); ln.append(d); det.append(ln); });
+    box.append(det);
+  } else box.append(el('p', 'hint', 'None yet. Files named like banner, logo, midroll or postroll in a campaign zip or Drive folder are picked up automatically.'));
+}
+$('#brand-add').onclick = () => $('#brand-file').click();
+$('#brand-file').onchange = e => {
+  const f = e.target.files[0]; if (!f) return; e.target.value = '';
+  const asBrand = /^video\//.test(f.type) || /\.(mp4|mov|webm|m4v|mkv)$/i.test(f.name);
+  toast('Adding ' + f.name + '...');
+  const x = new XMLHttpRequest(); x.open('POST', '/api/campaigns/' + encodeURIComponent(campaign.id) + '/assets?name=' + encodeURIComponent(f.name) + (asBrand ? '&as=branding' : ''));
+  x.onload = () => { let j = {}; try { j = JSON.parse(x.responseText); } catch (er) {} if (x.status !== 200){ toast(j.error || 'Failed'); return; } toast((j.note || 'Saved.') + (j.videos ? ' ' + j.videos + ' video(s) are being clipped.' : '')); refreshCampaigns(campaign.id).then(loadBranding); poll(); };
+  x.send(f);
+};
 async function browse(url, btn){
   btn.disabled = true; btn.textContent = 'Loading…';
   try {
@@ -481,15 +537,16 @@ $('#pick-add').onclick = () => {
 /* start */
 function addLines(lines){ const cur = $('#urls').value.trim(); $('#urls').value = (cur ? cur + '\n' : '') + lines.join('\n'); }
 async function uploadFiles(files){
-  files = [...files].filter(f => /\.(mp4|mov|mkv|webm|m4v|avi|zip)$/i.test(f.name) || (f.type || '').startsWith('video'));
-  if (!files.length){ toast('Those are not video files or a zip'); return; }
+  files = [...files].filter(f => /\.(mp4|mov|mkv|webm|m4v|avi|zip|png|jpe?g|webp)$/i.test(f.name) || (f.type || '').startsWith('video'));
+  if (!files.length){ toast('Those are not videos, images or a zip'); return; }
+  const notes = [];
   $('#upload-row').hidden = false; const added = [];
   for (let i = 0; i < files.length; i++){
     const f = files[i];
     await new Promise(res => {
       const x = new XMLHttpRequest(); x.open('POST', '/api/upload?name=' + encodeURIComponent(f.name) + '&campaign=' + encodeURIComponent(campaign ? campaign.id : ''));
       x.upload.onprogress = e => { if (e.lengthComputable){ $('#upload-bar').style.width = Math.round(e.loaded / e.total * 100) + '%'; } };
-      x.onload = () => { try { const j = JSON.parse(x.responseText); if (x.status === 200) added.push(...(j.paths || [j.path])); else toast(j.error || 'Upload failed'); } catch (e) { toast('Upload failed'); } res(); };
+      x.onload = () => { try { const j = JSON.parse(x.responseText); if (x.status === 200){ added.push(...(j.paths || [j.path])); if (j.note) notes.push(j.note); else if (j.assets) notes.push(j.assets + ' branding file(s) saved to this campaign (Campaigns tab).'); } else toast(j.error || 'Upload failed'); } catch (e) { toast('Upload failed'); } res(); };
       x.onerror = () => { toast('Upload failed for ' + f.name); res(); };
       $('#upload-msg').textContent = 'Adding ' + (i + 1) + ' of ' + files.length + ': ' + f.name;
       x.send(f);
@@ -497,6 +554,7 @@ async function uploadFiles(files){
   }
   $('#upload-row').hidden = true; $('#upload-bar').style.width = '0';
   if (added.length){ addLines(added); toast(added.length + ' video' + (added.length > 1 ? 's' : '') + ' added. Now press Find clips.'); }
+  if (notes.length) setTimeout(() => toast(notes.join(' ')), added.length ? 3000 : 0);
 }
 $('#pick-files').onclick = e => { e.stopPropagation(); $('#file-in').click(); };
 $('#file-in').onchange = e => { uploadFiles(e.target.files); e.target.value = ''; };
@@ -814,6 +872,21 @@ async function readBrief(req){
 $('#cb-file').onchange = e => { const f = e.target.files[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); readBrief(fd); e.target.value = ''; };
 $('#cb-url-go').onclick = () => { const u = $('#cb-url').value.trim(); if (!/^https?:\/\//.test(u)){ toast('Paste a full link'); return; } readBrief({ url: u }); };
 $('#cb-text-go').onclick = () => { const t = $('#cb-text').value.trim(); if (t.length < 30){ toast('Paste more of the brief'); return; } readBrief({ text: t }); };
+$('#cb-zip').onchange = e => {
+  const f = e.target.files[0]; if (!f) return; e.target.value = '';
+  $('#cb-status').textContent = 'Uploading and reading the zip... 0%';
+  const x = new XMLHttpRequest(); x.open('POST', '/api/campaigns/zipimport?name=' + encodeURIComponent(f.name));
+  x.upload.onprogress = ev => { if (ev.lengthComputable) $('#cb-status').textContent = 'Uploading and reading the zip... ' + Math.round(ev.loaded / ev.total * 100) + '%'; };
+  x.onload = () => {
+    let j = {}; try { j = JSON.parse(x.responseText); } catch (er) {}
+    if (x.status !== 200){ $('#cb-status').textContent = j.error || 'Upload failed'; return; }
+    const fd = j.found || {};
+    $('#cb-status').textContent = 'Found ' + fd.videos + ' video(s) to clip, ' + fd.assets + ' banner/roll file(s), ' + fd.docs + ' document(s). ' + (j.read_text ? 'Filled in from the brief: check it, then save.' : 'No brief document inside: fill in the details, then save.') + ' Saving adds the files and starts clipping.';
+    fillForm(j.campaign);
+  };
+  x.onerror = () => { $('#cb-status').textContent = 'Upload failed'; };
+  x.send(f);
+};
 $('#cf-cancel').onclick = () => { $('#cb-form').hidden = true; DRAFT = null; $('#cb-status').textContent = ''; };
 $('#cb-edit').onclick = () => { fillForm({ ...campaign, exists: false, editing: true }); $('#cb-status').textContent = 'Editing ' + campaign.name + '.'; };
 $('#cb-del').onclick = async () => {
@@ -829,7 +902,7 @@ $('#cf-save').onclick = async () => {
     join_url: $('#cf-join').value.trim(), keywords: splitList($('#cf-keywords').value, /,/), look_for: splitList($('#cf-look').value, /\n/), rules: splitList($('#cf-rules').value, /\n/) };
   if (!(DRAFT && DRAFT.editing)) delete c.id;
   delete c.editing;
-  try { const r = await api('/api/campaigns/upsert', { campaign: c }); toast('Saved ' + c.name); $('#cb-form').hidden = true; $('#cb-status').textContent = ''; await refreshCampaigns(r.id); }
+  try { const r = await api('/api/campaigns/upsert', { campaign: c }); toast('Saved ' + c.name + (r.note ? '. ' + r.note : '')); $('#cb-form').hidden = true; $('#cb-status').textContent = ''; await refreshCampaigns(r.id); }
   catch (e) { toast(e.message); }
 };
 async function refreshCampaigns(selectId){

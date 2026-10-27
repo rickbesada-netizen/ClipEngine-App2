@@ -137,7 +137,7 @@ TOPICS = {
 PLATFORMS = [("Instagram Reels", r"instagram|reels?\b"), ("TikTok", r"tik\s?tok"), ("YouTube Shorts", r"youtube\s*shorts|\bshorts\b"),
              ("X (Twitter)", r"\bx\.com\b|twitter"), ("Facebook Reels", r"facebook"), ("Snapchat", r"snapchat")]
 SOURCE_HOSTS = r"(youtube\.com/(@|c/|channel/|watch|shorts|live)|youtu\.be/|kick\.com/|twitch\.tv/|instagram\.com/|tiktok\.com/@|x\.com/|twitter\.com/|rumble\.com/|spotify\.com/show)"
-RULE_RX = re.compile(r"\b(must|cannot|can't|can not|not allowed|never|only|required|do not|don't|no |avoid|should|need to|at least|within|banned|prohibited|strictly|make sure)\b", re.I)
+RULE_RX = re.compile(r"\b(must|cannot|can't|can not|not allowed|never|only|required|do not|don't|no |avoid|should|need to|at least|within|banned|prohibited|strictly|make sure|include|keep it|use a|use english|submit your|not accepted|add (?:the |a )?link|link in bio|clearly visible)\b", re.I)
 
 
 def _lines(text: str) -> list[str]:
@@ -192,10 +192,12 @@ def parse(text: str) -> dict:
     urls = list(dict.fromkeys(u.rstrip(").,") for u in re.findall(r"https?://[^\s\"'<>)]+", t)))
     # OCR splits long links over lines: rejoin "https://www.youtube.com/@TRichesTr" + "ades"
     for i, ln in enumerate(lines[:-1]):
-        if re.search(r"https?://\S+$", ln) and re.match(r"^[\w./@?=&%-]+$", lines[i + 1]) and not lines[i + 1].startswith("http"):
+        if re.search(r"https?://\S+$", ln) and re.match(r"^[a-z0-9_./@?=&%-][\w./@?=&%-]*$", lines[i + 1]) and not lines[i + 1].startswith("http"):
             joined = re.search(r"https?://\S+$", ln).group(0) + lines[i + 1]
             urls = [joined if u == re.search(r"https?://\S+$", ln).group(0) else u for u in urls]
-    sources = [u for u in urls if re.search(SOURCE_HOSTS, u, re.I)]
+    sources = [u for u in urls if re.search(SOURCE_HOSTS, u, re.I)
+               or re.search(r"(drive|docs)\.google\.com/(drive/folders|file)/", u, re.I)
+               or re.search(r"\.(zip|mp4|mov|mkv|webm|m4v)(\?\S*)?$", u, re.I)]
     sources = [re.sub(r"\?hl=\w+$", "", u) for u in sources]
     join = next((u for u in urls if re.search(r"reachclipping|whop\.com|clipping|vyro|content.?rewards|discord\.(gg|com)", u, re.I)), "")
 
@@ -206,10 +208,10 @@ def parse(text: str) -> dict:
     m = re.search(r"\$\s?([\d.]+)\s*(?:/|per)\s*(1\s?k|1,?000|thousand)", low)
     if m:
         pay_bits.append(f"${m.group(1)} per 1K views")
-    m = re.search(r"\$\s?([\d,.]+)\s*min\b", low)
+    m = re.search(r"min(?:imum)?\s*payout\D{0,10}\$\s?([\d,.]+)", low) or re.search(r"\$\s?([\d,.]+)\s*min\b", low)
     if m:
         pay_bits.append(f"min payout ${m.group(1)}")
-    m = re.search(r"\$\s?([\d,.]+)\s*max\b", low)
+    m = re.search(r"max(?:imum)?\s*payout\D{0,10}\$\s?([\d,.]+)", low) or re.search(r"\$\s?([\d,.]+)\s*max\b", low)
     if m:
         pay_bits.append(f"max ${m.group(1)} per video")
     m = re.search(r"(?:min(?:imum)?\s*views?|mvr)[^\d]{0,40}([\d,.]+\s*k?)", low)

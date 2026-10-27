@@ -44,7 +44,11 @@ if getattr(sys, "frozen", False):
         CAMPAIGNS_PATH.write_text((P.APP_DIR / "campaigns.json").read_text(encoding="utf-8"), encoding="utf-8")
 LOCK = threading.RLock()
 PORT = int(os.environ.get("CLIP_ENGINE_PORT", "5050"))
-APP_VERSION = "1.4.1"
+try:
+    from build_info import BUILD  # written by the Windows build: every build gets its own number
+except Exception:  # noqa: BLE001
+    BUILD = "dev"
+APP_VERSION = f"1.9.{BUILD}"  # must change every release: a new exe only replaces a running copy with a different version
 
 DEFAULT_SETTINGS = {
     "clips_per_video": 4, "min_len": 20, "max_len": 45, "layout": "auto", "captions": True,
@@ -223,7 +227,7 @@ def render_again(c: dict, start: float, end: float, hook: str, layout: str | Non
     if not c.get("source_path") or not src.exists():
         raise FileNotFoundError("The source video was deleted, so this clip can't be re-cut.")
     c2 = {**c, "start": start, "end": end, "hook": hook}
-    settings = {**DB["settings"], "layout": layout or DB["settings"]["layout"]}
+    settings = {**DB["settings"], "layout": layout or DB["settings"]["layout"], **brand_settings(campaign_by_id(c["campaign"]))}
     info = {"w": c["src_w"], "h": c["src_h"]}
     tmp = P.WORK_DIR / f"rerender-{c['id']}.mp4"
     r = P.render_clip(src, info, c2, c.get("words", []), settings, tmp, thumb_path(c))
@@ -277,7 +281,7 @@ def recover_clips():
     added = 0
     for f in sorted(P.CLIP_DIR.rglob("*.mp4")):
         rel = f.relative_to(P.CLIP_DIR)
-        if "YouTube uploads" in rel.parts or str(rel).lower() in known:
+        if "YouTube uploads" in rel.parts or "Campaign assets" in rel.parts or str(rel).lower() in known:
             continue
         top = rel.parts[0].lower() if len(rel.parts) > 1 else ""
         camp = by_name.get(top)
@@ -314,9 +318,61 @@ def job(jid: str) -> dict | None:
     return next((j for j in DB["jobs"] if j["id"] == jid), None)
 
 
+def assets_dir(camp_id: str) -> Path:
+    """A campaign's branding files (banner, midroll/postroll, logos). Inside the clips folder, so a shared
+    OneDrive / Google Drive clips folder carries them to every laptop."""
+    return P.CLIP_DIR / "Campaign assets" / campaign_folder_name(camp_id)
+
+
+def brand_settings(camp: dict) -> dict:
+    out = {}
+    ad = assets_dir(camp["id"])
+    if camp.get("banner") and camp.get("banner_pos", "top") != "off" and (ad / camp["banner"]).exists():
+        out["banner_path"] = str(ad / camp["banner"])
+        out["banner_pos"] = camp.get("banner_pos", "top")
+    if camp.get("postroll") and (ad / camp["postroll"]).exists():
+        out["postroll_path"] = str(ad / camp["postroll"])
+    return out
+
+
+def update_campaign(cid: str, **fields):
+    lst = campaigns()
+    for x in lst:
+        if x["id"] == cid:
+            x.update(fields)
+    write_campaigns_text(json.dumps(lst, indent=2), encoding="utf-8")
+
+
+def auto_branding(cid: str, new_assets: list) -> str:
+    """Turns on a banner / postroll found in a campaign's files, if the campaign has none yet."""
+    camp = campaign_by_id(cid)
+    if not new_assets:
+        return ""
+    guess = P.pick_branding([Path(a) for a in new_assets])
+    fields, said = {}, []
+    if guess["banner"] and not camp.get("banner"):
+        fields.update(banner=guess["banner"], banner_pos=camp.get("banner_pos") or "top"); said.append(f"banner {guess['banner']}")
+    if guess["postroll"] and not camp.get("postroll"):
+        fields["postroll"] = guess["postroll"]; said.append(f"end video {guess['postroll']}")
+    if fields:
+        update_campaign(cid, **fields)
+        return "Added to every clip from now on: " + " and ".join(said) + " (change it in the Campaigns tab)."
+    return ""
+
+
+def queue_footage(parent: dict, videos: list):
+    with LOCK:
+        for v in videos:
+            nj = {"id": uuid.uuid4().hex[:8], "url": str(v), "title": Path(v).name, "campaign": parent["campaign"],
+                  "settings": parent.get("settings", {}), "status": "queued", "progress": 0, "message": "Waiting", "created": time.time()}
+            DB["jobs"].append(nj)
+            QUEUE.append(nj["id"])
+    WAKE.set()
+
+
 def process(j: dict):
-    settings = {**DB["settings"], **j.get("settings", {})}
     camp = campaign_by_id(j["campaign"])
+    settings = {**DB["settings"], **j.get("settings", {}), **brand_settings(camp)}
     cancel = lambda: job(j["id"]) is None or job(j["id"])["status"] == "cancelling"  # noqa: E731
 
     def progress(msg, frac=None):
@@ -329,19 +385,33 @@ def process(j: dict):
 
     src_url = j["url"]
     progress("Starting", 0.01)
-    if P.DRIVE_RX.search(src_url):
-        dest = P.DATA / "imports" / campaign_folder_name(camp["id"])
-        vids = P.drive_import(src_url, dest, progress, cancel)
-        if not vids:
-            raise RuntimeError("No videos were downloaded from that Google Drive link.")
-        with LOCK:
-            for v in vids:
-                nj = {"id": uuid.uuid4().hex[:8], "url": str(v), "title": v.name, "campaign": j["campaign"],
-                      "settings": j.get("settings", {}), "status": "queued", "progress": 0, "message": "Waiting", "created": time.time()}
-                DB["jobs"].append(nj)
-                QUEUE.append(nj["id"])
-        j["title"] = f"Google Drive: {len(vids)} video{'s' if len(vids) != 1 else ''}"
-        progress(f"Downloaded {len(vids)} video{'s' if len(vids) != 1 else ''} to ClipEngine data\\imports\\{dest.name}. Clipping them now.", 1.0)
+    if P.DRIVE_RX.search(src_url) or P.DIRECT_RX.match(src_url.strip()):
+        footage = P.DATA / "imports" / campaign_folder_name(camp["id"])
+        if P.DRIVE_RX.search(src_url):
+            got = P.drive_import(src_url, footage / "_incoming", progress, cancel)
+            where = "Google Drive"
+        else:
+            got = [P.direct_download(src_url.strip(), footage / "_incoming", progress, cancel)]
+            where = "that link"
+        progress("Unpacking", 0.92)
+        res = P.unpack(got, footage, assets_dir(camp["id"]))
+        shutil.rmtree(footage / "_incoming", ignore_errors=True)
+        auto = auto_branding(camp["id"], res["assets"])
+        queue_footage(j, res["videos"])
+        bits = [f"{len(res['videos'])} video{'s' if len(res['videos']) != 1 else ''} to clip"]
+        if res["assets"]:
+            bits.append(f"{len(res['assets'])} branding file{'s' if len(res['assets']) != 1 else ''} (banner, roll videos)")
+        if res["docs"]:
+            bits.append(f"{len(res['docs'])} document{'s' if len(res['docs']) != 1 else ''}")
+        j["title"] = f"From {where}: " + ", ".join(bits)
+        msg = "Got " + ", ".join(bits) + "."
+        if auto:
+            msg += " " + auto
+        if res["videos"]:
+            msg += " Clipping the videos now."
+        elif not res["assets"]:
+            raise RuntimeError(f"Nothing usable came from {where} (no videos, zips or images).")
+        progress(msg, 1.0)
         WAKE.set()
         return
     slug = P.kick_channel(src_url)
@@ -780,16 +850,18 @@ def upload_video():
     if dest.stat().st_size == 0:
         dest.unlink(missing_ok=True)
         return jsonify(error="That file was empty."), 400
-    if dest.suffix.lower() == ".zip":
+    cid = request.args.get("campaign")
+    if dest.suffix.lower() == ".zip" or (cid and dest.suffix.lower() in P.IMAGE_EXT):
         try:
-            vids = P.extract_videos_from_zip(dest, dest_dir / dest.stem)
+            res = P.unpack([dest], dest_dir / dest.stem if dest.suffix.lower() == ".zip" else dest_dir,
+                           assets_dir(cid) if cid else P.DATA / "imports" / "_assets")
         except Exception as e:  # noqa: BLE001
-            return jsonify(error=f"Couldn't open that zip: {str(e)[:150]}"), 400
-        finally:
             dest.unlink(missing_ok=True)
-        if not vids:
-            return jsonify(error="That zip has no video files in it."), 400
-        return jsonify(paths=[str(v) for v in vids])
+            return jsonify(error=f"Couldn't open that file: {str(e)[:150]}"), 400
+        note = auto_branding(cid, res["assets"]) if cid else ""
+        if not res["videos"] and not res["assets"]:
+            return jsonify(error="That zip has no videos or images in it."), 400
+        return jsonify(paths=[str(v) for v in res["videos"]], assets=len(res["assets"]), note=note)
     return jsonify(path=str(dest), paths=[str(dest)])
 
 
@@ -814,7 +886,8 @@ def add_jobs():
     urls = [u.strip() for u in body.get("urls", []) if u.strip()]
     if not urls:
         return jsonify(error="Add at least one link or file path."), 400
-    share = [u for u in urls if re.search(r"frame\.io|dropbox\.com|wetransfer|mega\.nz|onedrive|sharepoint|box\.com", u, re.I)]
+    share = [u for u in urls if re.search(r"frame\.io|f\.io/|dropbox\.com|wetransfer|mega\.nz|onedrive|sharepoint|box\.com", u, re.I)
+             and not P.DIRECT_RX.match(u)]
     if share:
         return jsonify(error="That's a download page (Frame.io, Dropbox…), not a video. Download the files to your PC first, "
                              "then drag them (or the zip) into Clip Engine. Google Drive links work directly."), 400
@@ -1124,6 +1197,161 @@ def yt_upload(cid):
     return jsonify(ok=True)
 
 
+# ---------------------------------------------------------------- campaign branding files and zips
+def _save_stream(dest_dir: Path, name: str) -> Path:
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", Path(name or "file").name).strip() or "file"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / name
+    k = 2
+    while dest.exists():
+        dest = dest_dir / f"{Path(name).stem} ({k}){Path(name).suffix}"; k += 1
+    with open(dest, "wb") as fh:
+        while True:
+            chunk = request.stream.read(4 * 1024 * 1024)
+            if not chunk:
+                break
+            fh.write(chunk)
+    return dest
+
+
+@APP.get("/api/campaigns/<cid>/assets")
+def campaign_assets(cid):
+    camp = campaign_by_id(cid)
+    ad = assets_dir(camp["id"])
+    files = []
+    if ad.exists():
+        for f in sorted(ad.iterdir()):
+            if f.is_file():
+                low = f.suffix.lower()
+                files.append({"name": f.name, "kind": "image" if low in P.IMAGE_EXT else "video" if low in P.VIDEO_EXT else "other",
+                              "size": f.stat().st_size})
+    return jsonify(files=files, banner=camp.get("banner", ""), banner_pos=camp.get("banner_pos", "top"),
+                   postroll=camp.get("postroll", ""), folder=str(ad))
+
+
+@APP.get("/campaign-assets/<cid>/<name>")
+def campaign_asset_file(cid, name):
+    return send_from_directory(assets_dir(campaign_by_id(cid)["id"]), Path(name).name)
+
+
+@APP.post("/api/campaigns/<cid>/assets")
+def campaign_assets_upload(cid):
+    """A banner image, a midroll/postroll video, or a zip of them. Videos in a zip that aren't named like
+    branding are footage: they go to Find clips."""
+    camp = campaign_by_id(cid)
+    ad = assets_dir(camp["id"])
+    f = _save_stream(ad / "_incoming", request.args.get("name") or "file")
+    if f.stat().st_size == 0:
+        f.unlink(missing_ok=True)
+        return jsonify(error="That file was empty."), 400
+    as_branding = request.args.get("as") == "branding"
+    footage = P.DATA / "imports" / campaign_folder_name(camp["id"])
+    if f.suffix.lower() in P.VIDEO_EXT and as_branding:
+        t = ad / f.name
+        shutil.move(str(f), str(t))
+        res = {"videos": [], "assets": [t], "docs": []}
+    else:
+        res = P.unpack([f], footage, ad)
+    shutil.rmtree(ad / "_incoming", ignore_errors=True)
+    note = auto_branding(camp["id"], res["assets"])
+    if res["videos"]:
+        queue_footage({"campaign": camp["id"], "settings": {}}, res["videos"])
+    return jsonify(ok=True, assets=len(res["assets"]), videos=len(res["videos"]), note=note)
+
+
+@APP.post("/api/campaigns/<cid>/branding")
+def campaign_branding(cid):
+    b = request.get_json(force=True) or {}
+    camp = campaign_by_id(cid)
+    fields = {}
+    for k in ("banner", "postroll"):
+        if k in b:
+            v = Path(b[k] or "").name
+            if v and not (assets_dir(camp["id"]) / v).exists():
+                return jsonify(error=f"{v} isn't in this campaign's files."), 400
+            fields[k] = v
+    if b.get("banner_pos") in ("top", "bottom", "off"):
+        fields["banner_pos"] = b["banner_pos"]
+    update_campaign(camp["id"], **fields)
+    return jsonify(ok=True)
+
+
+@APP.delete("/api/campaigns/<cid>/assets/<name>")
+def campaign_asset_delete(cid, name):
+    camp = campaign_by_id(cid)
+    (assets_dir(camp["id"]) / Path(name).name).unlink(missing_ok=True)
+    fields = {k: "" for k in ("banner", "postroll") if camp.get(k) == Path(name).name}
+    if fields:
+        update_campaign(camp["id"], **fields)
+    return jsonify(ok=True)
+
+
+STAGE_DIR = P.DATA / "staging"
+
+
+@APP.post("/api/campaigns/zipimport")
+def campaign_zip_import():
+    """A campaign's whole zip: reads the brief documents in it to fill in the campaign, and keeps the
+    branding files and footage until the campaign is saved."""
+    token = uuid.uuid4().hex[:10]
+    stage = STAGE_DIR / token
+    f = _save_stream(stage / "upload", request.args.get("name") or "campaign.zip")
+    if f.suffix.lower() != ".zip":
+        shutil.rmtree(stage, ignore_errors=True)
+        return jsonify(error="Choose a .zip file."), 400
+    try:
+        res = P.unpack([f], stage / "footage", stage / "assets")
+    except Exception as e:  # noqa: BLE001
+        shutil.rmtree(stage, ignore_errors=True)
+        return jsonify(error=f"Couldn't open that zip: {str(e)[:150]}"), 400
+    text = ""
+    for d in res["docs"]:
+        try:
+            text += f"\n\n{d.stem}\n" + CI.text_from_file(d.name, d.read_bytes())
+        except Exception as e:  # noqa: BLE001
+            print("zip doc:", d, e, flush=True)
+    if len(text.strip()) >= 30:
+        draft = CI.parse(text)
+    else:
+        nm = re.sub(r"[-_]+", " ", Path(request.args.get("name") or "Campaign").stem).strip().title()[:40]
+        draft = CI.parse(f"{nm} campaign\n{nm}")
+        draft["name"] = nm
+    draft["stage"] = token
+    draft["exists"] = draft.get("id") in {c["id"] for c in campaigns()}
+    return jsonify(campaign=draft, found={"videos": len(res["videos"]), "assets": len(res["assets"]), "docs": len(res["docs"])},
+                   read_text=len(text.strip()) >= 30)
+
+
+def apply_stage(cid: str, token: str) -> str:
+    stage = STAGE_DIR / re.sub(r"[^a-f0-9]", "", token or "")
+    if not token or not stage.exists():
+        return ""
+    ad = assets_dir(cid)
+    ad.mkdir(parents=True, exist_ok=True)
+    moved = []
+    for f in (stage / "assets").glob("*") if (stage / "assets").exists() else []:
+        if f.is_file():
+            t = ad / f.name
+            if not t.exists():
+                shutil.move(str(f), str(t))
+            moved.append(t)
+    vids = []
+    footage = P.DATA / "imports" / campaign_folder_name(cid)
+    footage.mkdir(parents=True, exist_ok=True)
+    for f in (stage / "footage").glob("*") if (stage / "footage").exists() else []:
+        if f.is_file():
+            t = footage / f.name
+            if not t.exists():
+                shutil.move(str(f), str(t))
+            vids.append(t)
+    shutil.rmtree(stage, ignore_errors=True)
+    note = auto_branding(cid, moved)
+    if vids:
+        queue_footage({"campaign": cid, "settings": {}}, vids)
+        note = (note + " " if note else "") + f"{len(vids)} video{'s' if len(vids) != 1 else ''} from the zip are being clipped."
+    return note
+
+
 # ---------------------------------------------------------------- campaigns from briefs
 @APP.post("/api/campaigns/import")
 def campaign_import():
@@ -1159,6 +1387,7 @@ def campaign_upsert():
         return jsonify(error="Give the campaign a name."), 400
     c["id"] = re.sub(r"[^a-z0-9]+", "", (c.get("id") or c["name"]).lower())[:24] or uuid.uuid4().hex[:6]
     c.pop("exists", None)
+    stage = c.pop("stage", None)
     for k in ("sources", "hashtags", "extra_tags", "keywords", "look_for", "platforms", "rules"):
         v = c.get(k) or []
         c[k] = [x.strip() for x in (v if isinstance(v, list) else str(v).splitlines()) if str(x).strip()]
@@ -1177,7 +1406,8 @@ def campaign_upsert():
     with LOCK:
         DB["campaign"] = c["id"]
     save_db()
-    return jsonify(ok=True, id=c["id"])
+    note = apply_stage(c["id"], stage) if stage else ""
+    return jsonify(ok=True, id=c["id"], note=note)
 
 
 @APP.delete("/api/campaigns/<cid>")
