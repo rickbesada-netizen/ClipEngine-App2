@@ -50,7 +50,7 @@ DEFAULT_SETTINGS = {
     "clips_per_video": 4, "min_len": 20, "max_len": 45, "layout": "auto", "captions": True,
     "hook_overlay": True, "whisper_model": "base", "max_height": 1080, "cookies_browser": "none",
     "cookies_file": "", "use_ollama": False, "youtube_privacy": "public", "ollama_model": "", "caption_style": {"upper": True, "size": 96},
-    "clean_language": True, "mute_swears": True, "finder_platforms": [], "finder_min_rate": 0, "finder_min_budget": 300, "finder_hide_apply": False, "finder_pool": True,
+    "clean_language": True, "mute_swears": True, "avoid_swearing": True, "clips_folder": "", "finder_platforms": [], "finder_min_rate": 0, "finder_min_budget": 300, "finder_hide_apply": False, "finder_pool": True,
 }
 
 
@@ -180,20 +180,94 @@ def organise_clips():
 
 
 
+def safe_hook(hook: str, title: str, camp_name: str) -> str:
+    """A hook with no swearing at all and at least 3 real words; falls back to the video title, then the campaign."""
+    for cand in (hook, P.clean_text(hook or ""), P.title_hook(title or ""), f"{camp_name} best moments"):
+        if cand and P.is_clean_hook(cand):
+            return cand.strip()
+    return f"{camp_name} best moments"
+
+
 def clean_old_captions():
-    """Masks swearing in captions and hooks of clips made before the clean-language setting existed."""
+    """Removes swearing from captions and hooks of clips made by older versions, and queues their videos to be
+    remade without it (on-screen text and audio)."""
     if not DB["settings"].get("clean_language", True):
         return
     n = 0
     with LOCK:
         for c in DB["clips"]:
-            for k in ("caption", "hook"):
-                if c.get(k) and P.has_swear(c[k]):
-                    c[k] = P.clean_text(c[k])
-                    n += 1
+            words_bad = any(P.has_swear(w["w"]) for w in c.get("words", []) if c["start"] - 0.5 <= w["s"] <= c["end"] + 0.5)
+            hook_bad = P.has_swear(c.get("hook", ""))
+            cap_bad = P.has_swear(c.get("caption", ""))
+            if not (hook_bad or cap_bad or words_bad):
+                continue
+            if c.get("clean_v") == 2:
+                continue  # already remade (or can't be)
+            old_hook = c.get("hook", "")
+            if hook_bad:
+                c["hook"] = safe_hook(old_hook, c.get("source_title", ""), campaign_by_id(c["campaign"]).get("name", ""))
+            cap = c.get("caption", "")
+            if old_hook and cap.startswith(old_hook):
+                cap = c["hook"] + cap[len(old_hook):]
+            c["caption"] = P.clean_text(cap)
+            c["needs_recut"] = True
+            n += 1
     if n:
         save_db()
-        print(f"Cleaned swearing from {n} caption(s)/hook(s)", flush=True)
+        print(f"Found {n} clip(s) with swearing; remaking them clean", flush=True)
+
+
+def render_again(c: dict, start: float, end: float, hook: str, layout: str | None = None):
+    """Re-renders a clip from its source video. Raises if the source is gone."""
+    src = Path(c.get("source_path") or "")
+    if not c.get("source_path") or not src.exists():
+        raise FileNotFoundError("The source video was deleted, so this clip can't be re-cut.")
+    c2 = {**c, "start": start, "end": end, "hook": hook}
+    settings = {**DB["settings"], "layout": layout or DB["settings"]["layout"]}
+    info = {"w": c["src_w"], "h": c["src_h"]}
+    tmp = P.WORK_DIR / f"rerender-{c['id']}.mp4"
+    r = P.render_clip(src, info, c2, c.get("words", []), settings, tmp, thumb_path(c))
+    with LOCK:
+        old = clip_path(c)
+        try:
+            old.unlink()
+        except OSError:
+            pass
+        new_name = new_clip_relpath(c["campaign"], hook, keep=c["file"])
+        (P.CLIP_DIR / new_name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(tmp), str(P.CLIP_DIR / new_name))
+        c.update(start=start, end=end, hook=hook, file=new_name, thumb=f"{c['id']}.jpg", **r)
+    save_db()
+
+
+def fix_sworn_clips():
+    """Background: remakes clips flagged by clean_old_captions, one at a time, when the app is otherwise idle."""
+    time.sleep(30)
+    while True:
+        todo = [c for c in DB["clips"] if c.get("needs_recut")]
+        if not todo:
+            time.sleep(60)
+            continue
+        if QUEUE or any(j["status"] == "running" for j in DB["jobs"]):
+            time.sleep(20)  # clipping comes first
+            continue
+        c = todo[0]
+        try:
+            if not clip_path(c).exists():
+                raise FileNotFoundError("video is on another computer")
+            render_again(c, c["start"], c["end"], c["hook"])
+            c.pop("swear_note", None)
+            print("Remade clean:", c["file"], flush=True)
+        except FileNotFoundError as e:
+            if "another computer" not in str(e):
+                c["swear_note"] = "Has swearing in the video and the source was deleted, so it can't be remade. Delete it rather than post it."
+        except Exception as e:  # noqa: BLE001
+            print("fix_sworn_clips:", e, flush=True)
+            c["swear_note"] = "Couldn't remake this clip without the swearing. Delete it rather than post it."
+        with LOCK:
+            c.pop("needs_recut", None)
+            c["clean_v"] = 2
+        save_db()
 
 
 def recover_clips():
@@ -337,6 +411,10 @@ def process(j: dict):
             progress("Asking the local AI to rate moments", 0.74)
             top = P.pick(cands, n * 3, gap=2)
             cands = P.ollama_rank(top, settings["ollama_model"], camp.get("look_for_short", ""))
+        if settings.get("avoid_swearing", True):
+            clean = [c_ for c_ in cands if not c_.get("sworn")]
+            if clean:
+                cands = clean
         chosen = P.pick(cands, n)
     if not chosen:
         raise RuntimeError(f"No complete moments between {min_len:g} and {max_len:g} seconds. Try a wider length range.")
@@ -349,9 +427,9 @@ def process(j: dict):
         c["start"] = max(0.0, c["start"] - 0.15)
         c["end"] = min(dur or c["end"] + 0.3, c["end"] + 0.35)
         hook = c.get("ai_title") or (P.hook_line(c["text"], used_hooks) if c["text"].strip() else "")
-        if not hook or hook in used_hooks:
-            base = P.title_hook(meta["title"]) or camp["name"]
-            hook = base if base not in used_hooks else f"{base} part {k + 1}"
+        hook = safe_hook(hook, meta["title"], camp["name"])
+        if hook in used_hooks:
+            hook = f"{hook} part {k + 1}"
         used_hooks.add(hook)
         cid = uuid.uuid4().hex[:8]
         name = new_clip_relpath(camp["id"], hook)
@@ -621,7 +699,16 @@ def clip_file(name):
 
 @APP.get("/thumbs/<name>")
 def thumb_file(name):
-    return send_from_directory(P.THUMB_DIR, Path(name).name)
+    name = Path(name).name
+    if not (P.THUMB_DIR / name).exists():
+        c = clip_by_id(Path(name).stem)
+        if c and clip_path(c).exists():  # made on another computer: make its thumbnail here
+            try:
+                subprocess.run([P.FFMPEG, "-y", "-ss", "1.0", "-i", str(clip_path(c)), "-frames:v", "1", "-vf", "scale=360:-2",
+                                str(P.THUMB_DIR / name)], capture_output=True, creationflags=P._NO_WINDOW, timeout=60)
+            except Exception:  # noqa: BLE001
+                pass
+    return send_from_directory(P.THUMB_DIR, name)
 
 
 @APP.get("/api/state")
@@ -800,32 +887,21 @@ def rerender(cid):
     c = clip_by_id(cid)
     if not c:
         return jsonify(error="Not found"), 404
-    src = Path(c["source_path"])
-    if not src.exists():
-        return jsonify(error="The source video was deleted, so this clip can't be re-cut."), 400
-    c2 = dict(c)
-    c2["start"] = float(body.get("start", c["start"]))
-    c2["end"] = float(body.get("end", c["end"]))
-    if c2["end"] - c2["start"] < 3:
+    start, end = float(body.get("start", c["start"])), float(body.get("end", c["end"]))
+    if end - start < 3:
         return jsonify(error="Clip must be at least 3 seconds."), 400
-    c2["hook"] = body.get("hook", c["hook"])
-    settings = {**DB["settings"], "layout": body.get("layout") or DB["settings"]["layout"]}
-    info = {"w": c["src_w"], "h": c["src_h"]}
-    words = c.get("words", [])
-    tmp = P.WORK_DIR / f"rerender-{c['id']}.mp4"
+    hook = body.get("hook", c["hook"])
+    if DB["settings"].get("clean_language", True) and P.has_swear(hook):
+        return jsonify(error="That hook has swearing in it. Change it and try again."), 400
     try:
-        r = P.render_clip(src, info, c2, words, settings, tmp, thumb_path(c))
+        render_again(c, start, end, hook, body.get("layout"))
+    except FileNotFoundError as e:
+        return jsonify(error=str(e)), 400
     except Exception as e:  # noqa: BLE001
         return jsonify(error=str(e)[:300]), 500
     with LOCK:
-        old = clip_path(c)
-        try:
-            old.unlink()
-        except OSError:
-            pass
-        new_name = new_clip_relpath(c["campaign"], c2["hook"], keep=c["file"])
-        shutil.move(str(tmp), str(P.CLIP_DIR / new_name))
-        c.update(start=c2["start"], end=c2["end"], hook=c2["hook"], file=new_name, thumb=f"{c['id']}.jpg", **r)
+        c.pop("needs_recut", None)
+        c.pop("swear_note", None)
     save_db()
     return jsonify(ok=True)
 
@@ -1336,6 +1412,101 @@ def finder_import():
     return jsonify(campaign=draft)
 
 
+# ---------------------------------------------------------------- shared clips folder (OneDrive / Google Drive)
+FOLDER_STATE = {"busy": False, "msg": "", "error": ""}
+
+
+def apply_clips_folder():
+    f = (DB["settings"].get("clips_folder") or "").strip()
+    if f and Path(f).is_dir():
+        P.CLIP_DIR = Path(f)
+    else:
+        P.CLIP_DIR = P.DATA / "clips"
+    P.CLIP_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def cloud_folder_suggestions() -> list[dict]:
+    out = []
+    home = Path.home()
+    for env in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        v = os.environ.get(env)
+        if v and Path(v).is_dir() and not any(o["path"] == v for o in out):
+            out.append({"name": "OneDrive" if env != "OneDriveCommercial" else "OneDrive (work)", "path": v})
+    cands = [home / "Google Drive" / "My Drive", home / "Google Drive", home / "My Drive"]
+    if os.name == "nt":
+        cands += [Path(f"{d}:/My Drive") for d in "DEFGHIJKLMNOPQRSTUVWXYZ"]
+    for cnd in cands:
+        try:
+            if cnd.is_dir():
+                out.append({"name": "Google Drive", "path": str(cnd)})
+                break
+        except OSError:
+            pass
+    if (home / "Dropbox").is_dir():
+        out.append({"name": "Dropbox", "path": str(home / "Dropbox")})
+    return out
+
+
+def move_clips_to(target: Path):
+    """Moves every clip video into the new folder (keeping Campaign/Title.mp4), then switches to it."""
+    FOLDER_STATE.update(busy=True, msg="Moving clips", error="")
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        old = P.CLIP_DIR
+        files = [f for f in old.rglob("*.mp4")] if old.exists() and old.resolve() != target.resolve() else []
+        for i, f in enumerate(files):
+            rel = f.relative_to(old)
+            dst = target / rel
+            FOLDER_STATE["msg"] = f"Moving clip {i + 1} of {len(files)}"
+            if dst.exists():
+                continue  # already there (e.g. synced from another computer)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(f), str(dst))
+        with LOCK:
+            DB["settings"]["clips_folder"] = str(target)
+        save_db()
+        apply_clips_folder()
+        FOLDER_STATE["msg"] = f"Done. {len(files)} clip(s) moved."
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        FOLDER_STATE["error"] = f"Couldn't move the clips: {str(e)[:200]}"
+    finally:
+        FOLDER_STATE["busy"] = False
+
+
+@APP.get("/api/clipsfolder")
+def clips_folder_get():
+    return jsonify(path=str(P.CLIP_DIR), custom=bool(DB["settings"].get("clips_folder")), suggestions=cloud_folder_suggestions(),
+                   **FOLDER_STATE)
+
+
+@APP.post("/api/clipsfolder")
+def clips_folder_set():
+    b = request.get_json(force=True) or {}
+    if FOLDER_STATE["busy"]:
+        return jsonify(error="Still moving clips. Wait a moment."), 409
+    if b.get("reset"):
+        target = P.DATA / "clips"
+    else:
+        base = (b.get("path") or "").strip().strip('"')
+        if b.get("pick"):
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+                root = tk.Tk(); root.withdraw(); root.attributes("-topmost", True)
+                base = filedialog.askdirectory(title="Choose a folder that OneDrive or Google Drive syncs") or ""
+                root.destroy()
+            except Exception as e:  # noqa: BLE001
+                return jsonify(error=f"Couldn't open the folder picker ({e}). Paste the folder path instead."), 400
+            if not base:
+                return jsonify(error="No folder chosen."), 400
+        if not base or not Path(base).is_dir():
+            return jsonify(error="That folder doesn't exist on this computer."), 400
+        target = Path(base) if Path(base).name == "Clip Engine clips" else Path(base) / "Clip Engine clips"
+    threading.Thread(target=move_clips_to, args=(target,), daemon=True).start()
+    return jsonify(ok=True, path=str(target))
+
+
 # ---------------------------------------------------------------- cloud sync
 SYNC = CS.Sync(P.DATA / "sync.json")
 
@@ -1394,8 +1565,23 @@ def _sync_apply(merged: dict, snap: dict):
                     except OSError:
                         traceback.print_exc()
             clips.append(nc)
+        # a clip "recovered" from the shared folder on this computer that turns out to be another computer's clip
+        by_file = {}
+        for c in clips:
+            by_file.setdefault(c.get("file", "").lower(), []).append(c)
+        for group in by_file.values():
+            if len(group) > 1:
+                # every laptop must pick the same one: prefer a real (not recovered) record, then the lowest id
+                keep = min(group, key=lambda c: (c.get("source_title") == "(recovered clip)", c["id"]))
+                for c in group:
+                    if c is not keep:
+                        clips.remove(c)
+                        newv.pop(c["id"], None)
+        still_used = {c.get("file", "").lower() for c in clips}
         for k, c in curc.items():
             if k not in newv:
+                if c.get("file", "").lower() in still_used:
+                    continue
                 for f in (clip_path(c), thumb_path(c)):
                     try:
                         f.unlink()
@@ -1630,6 +1816,7 @@ if __name__ == "__main__":
         sys.exit(0)
     while not _port_free(port) and port < PORT + 10:
         port += 1
+    apply_clips_folder()
     organise_clips()
     try:
         if recover_clips():
@@ -1641,6 +1828,7 @@ if __name__ == "__main__":
     threading.Thread(target=watcher, daemon=True).start()
     threading.Thread(target=sync_loop, daemon=True).start()
     threading.Thread(target=finder_loop, daemon=True).start()
+    threading.Thread(target=fix_sworn_clips, daemon=True).start()
     SYNC_WAKE.set()
     url = f"http://127.0.0.1:{port}"
     from werkzeug.serving import make_server

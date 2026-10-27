@@ -326,7 +326,9 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
           <div class="field"><label class="lbl" for="s-upper">Caption case</label>
             <select id="s-upper"><option value="1">UPPERCASE</option><option value="0">Normal case</option></select></div>
           <div class="field"><label class="lbl" for="s-clean">Swearing in captions and hooks</label>
-            <select id="s-clean"><option value="1">Hide it (f***)</option><option value="0">Leave as said</option></select></div>
+            <select id="s-clean"><option value="1">Remove it completely</option><option value="0">Leave as said</option></select></div>
+          <div class="field"><label class="lbl" for="s-avoid">Moments with swearing</label>
+            <select id="s-avoid"><option value="1">Skip them</option><option value="0">Allow them</option></select></div>
           <div class="field"><label class="lbl" for="s-mute">Swearing in the audio</label>
             <select id="s-mute"><option value="1">Mute the word</option><option value="0">Leave as said</option></select></div>
           <div class="field"><label class="lbl" for="s-hook">Hook title</label>
@@ -348,8 +350,8 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
         <div class="row"><button class="btn" id="cleanup" type="button">Delete downloaded source videos</button><span class="hint">Finished clips are kept.</span></div>
       </div>
       <div class="panel" style="grid-column:1/-1" id="sync-panel">
-        <h2>Sync across computers</h2>
-        <p class="hint">Sign in on each computer with the same email and password. Your campaigns, settings, channel names, clip list, captions, posted links and Whop deadlines then stay the same everywhere and update by themselves. Video files stay on the computer that made them, because they're too big to sync for free. Clips made on another computer still show here, marked as such.</p>
+        <h2>Sync across laptops</h2>
+        <p class="hint">Sign in on each computer with the same email and password. Your campaigns, settings, channel names, clip list, captions, posted links and Whop deadlines then stay the same everywhere and update by themselves. To get the clip videos themselves on every laptop too, use the clips folder option below.</p>
         <div id="sync-out">
           <div class="fields" style="grid-template-columns:repeat(2,minmax(0,1fr))">
             <div class="field"><label class="lbl" for="sync-email">Email</label><input type="email" id="sync-email" autocomplete="username"></div>
@@ -358,6 +360,11 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
           <div class="row"><button class="go" id="sync-create" type="button" style="font-size:17px">Create account</button><button class="btn" id="sync-signin" type="button">Sign in</button>
             <span class="hint">First computer: Create account. Every other computer: Sign in.</span></div>
         </div>
+        <h2 style="margin-top:8px">Clip videos on every laptop</h2>
+        <p class="hint">Save clips in a folder that OneDrive or Google Drive syncs, and do the same on each laptop. Every clip you make then appears on all of them, ready to post. Free (OneDrive gives 5 GB, Google Drive 15 GB). Pick the same service on every laptop.</p>
+        <p style="margin:0">Clips are saved in: <span class="mono" id="cf-path"></span></p>
+        <div class="row" id="cf-btns"></div>
+        <span class="hint" id="cf-status"></span>
         <div id="sync-in" hidden>
           <p id="sync-state" style="margin:0"></p>
           <div class="row"><button class="btn" id="sync-go" type="button">Sync now</button><button class="btn" id="sync-out-btn" type="button">Sign out</button></div>
@@ -411,7 +418,7 @@ let skew = 0;
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-selected', x === b));
   ['make', 'clips', 'accounts', 'rules', 'discover', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== b.dataset.tab);
-  if (b.dataset.tab === 'settings') { loadOllama(); loadYT(); }
+  if (b.dataset.tab === 'settings') { loadOllama(); loadYT(); loadClipsFolder(); }
   if (b.dataset.tab === 'discover') { loadFinder(true); }
   if (b.dataset.tab === 'accounts') loadAccounts();
   if (b.dataset.tab === 'clips') loadWatch();
@@ -515,14 +522,14 @@ function bindSettings(){
   $('#s-model').value = s.whisper_model; $('#s-height').value = String(s.max_height); $('#s-captions').value = s.captions ? '1' : '0';
   $('#s-upper').value = (s.caption_style || {}).upper === false ? '0' : '1'; $('#s-hook').value = s.hook_overlay ? '1' : '0';
   $('#s-cookies').value = s.cookies_browser || 'none'; $('#s-cookiefile').value = s.cookies_file || '';
-  $('#s-clean').value = s.clean_language === false ? '0' : '1'; $('#s-mute').value = s.mute_swears === false ? '0' : '1';
+  $('#s-clean').value = s.clean_language === false ? '0' : '1'; $('#s-avoid').value = s.avoid_swearing === false ? '0' : '1'; $('#s-mute').value = s.mute_swears === false ? '0' : '1';
   const save = () => api('/api/settings', { settings: {
     whisper_model: $('#s-model').value, max_height: +$('#s-height').value, captions: $('#s-captions').value === '1',
     caption_style: { ...(S.settings.caption_style || {}), upper: $('#s-upper').value === '1' }, hook_overlay: $('#s-hook').value === '1',
-    clean_language: $('#s-clean').value === '1', mute_swears: $('#s-mute').value === '1',
+    clean_language: $('#s-clean').value === '1', avoid_swearing: $('#s-avoid').value === '1', mute_swears: $('#s-mute').value === '1',
     cookies_browser: $('#s-cookies').value, cookies_file: $('#s-cookiefile').value.trim(),
     use_ollama: !!$('#s-ollama').value, ollama_model: $('#s-ollama').value } }).then(() => toast('Saved')).catch(e => toast(e.message));
-  ['#s-model', '#s-height', '#s-captions', '#s-upper', '#s-hook', '#s-clean', '#s-mute', '#s-cookies', '#s-cookiefile', '#s-ollama'].forEach(id => $(id).onchange = save);
+  ['#s-model', '#s-height', '#s-captions', '#s-upper', '#s-hook', '#s-clean', '#s-mute', '#s-avoid', '#s-cookies', '#s-cookiefile', '#s-ollama'].forEach(id => $(id).onchange = save);
 }
 async function loadOllama(){
   try {
@@ -580,7 +587,7 @@ function renderClips(force){
   const mine = S.clips.filter(c => campaign && c.campaign === campaign.id);
   const list = mine.filter(c => filter === 'all' || c.status === filter);
   $('#n-clips').textContent = mine.length ? String(mine.length) : '';
-  const sig = JSON.stringify([filter, campaign && campaign.id, list.map(c => [c.id, c.file, c.here, c.caption, c.status, (c.posts || []).length, (c.posts || []).filter(p => p.submitted).length, JSON.stringify(c.yt_upload || {}), !!c.yt_batch]), !!(YTS && YTS.connected)]);
+  const sig = JSON.stringify([filter, campaign && campaign.id, list.map(c => [c.id, c.file, c.here, c.caption, c.needs_recut, c.swear_note, c.status, (c.posts || []).length, (c.posts || []).filter(p => p.submitted).length, JSON.stringify(c.yt_upload || {}), !!c.yt_batch]), !!(YTS && YTS.connected)]);
   renderDue();
   if (sig === clipSig && !force) return;
   if (!force && document.activeElement && document.activeElement.id && document.activeElement.id.startsWith('cap-')) return;
@@ -610,7 +617,7 @@ function renderClips(force){
 function clipCard(c){
   const card = el('div', 'clip');
   if (c.here === false){
-    const ph = el('div', 'elsewhere', 'Made on your other computer. The video file is there; everything else is synced.'); card.append(ph);
+    const ph = el('div', 'elsewhere', 'Made on your other laptop. To get the video here too, open Settings and use OneDrive or Google Drive under "Clip videos on every laptop" on both laptops.'); card.append(ph);
   } else {
     const v = el('video'); v.src = '/clips/' + c.file.split('/').map(encodeURIComponent).join('/'); v.poster = '/thumbs/' + encodeURIComponent(c.thumb || (c.id + '.jpg')); v.controls = true; v.preload = 'none'; v.playsInline = true; card.append(v);
   }
@@ -619,9 +626,11 @@ function clipCard(c){
   tags.append(el('span', 'tag st-' + c.status, { ready: 'Ready to post', posted: 'Posted', submitted: 'Submitted' }[c.status] || c.status));
   tags.append(el('span', 'tag', fmt(c.end - c.start) + ' long'), el('span', 'tag', 'from ' + fmt(c.start)), el('span', 'tag', c.layout === 'face' ? 'follows face' : c.layout === 'split' ? 'facecam + screen' : c.layout === 'native' ? 'vertical source' : 'full frame'));
   if (c.yt_batch && c.status === 'ready') tags.append(el('span', 'tag st-posted', 'In YouTube batch'));
+  if (c.needs_recut) tags.append(el('span', 'tag st-posted', 'Being remade without swearing'));
   (c.reasons || []).forEach(r => tags.append(el('span', 'tag', r)));
   m.append(tags);
   m.append(el('div', 'src-t', c.source_title));
+  if (c.swear_note) m.append(el('p', 'notice', c.swear_note));
   m.append(el('span', 'lbl', 'Caption'));
   const ta = el('textarea'); ta.id = 'cap-' + c.id; ta.value = c.caption; ta.onchange = () => api('/api/clips/' + c.id, { caption: ta.value }).then(() => { c.caption = ta.value; toast('Caption saved'); });
   m.append(ta);
@@ -631,7 +640,7 @@ function clipCard(c){
   const acts = el('div', 'row');
   const b1 = el('button', 'btn', 'Copy caption'); b1.type = 'button'; b1.onclick = () => copy(ta.value); acts.append(b1);
   if (c.here !== false){ const b2 = el('button', 'btn', 'Show file'); b2.type = 'button'; b2.onclick = () => api('/api/open', { file: c.file }).catch(e => toast(e.message)); acts.append(b2); }
-  const b3 = el('a', 'btn', 'Watch source'); b3.href = c.source_url + (c.source_url.includes('youtube.com/watch') ? '&t=' + Math.floor(c.start) + 's' : ''); b3.target = '_blank'; b3.rel = 'noopener'; acts.append(b3);
+  if (c.source_url && /^https?:/.test(c.source_url)){ const b3 = el('a', 'btn', 'Watch source'); b3.href = c.source_url + (c.source_url.includes('youtube.com/watch') ? '&t=' + Math.floor(c.start) + 's' : ''); b3.target = '_blank'; b3.rel = 'noopener'; acts.append(b3); }
   const b4 = el('button', 'btn', 'Delete'); b4.type = 'button'; b4.onclick = () => { if (b4.dataset.sure){ api('/api/clips/' + c.id, null, 'DELETE').then(poll); } else { b4.dataset.sure = 1; b4.textContent = 'Click again to delete'; } }; acts.append(b4);
   m.append(acts);
 
@@ -937,6 +946,29 @@ $('#sync-go').onclick = async () => { try { SY = await api('/api/sync/now', {}, 
 $('#sync-out-btn').onclick = async () => { SY = await api('/api/sync/logout', {}); showSync(); toast('Signed out. Everything stays on this computer.'); };
 loadSync(); setInterval(loadSync, 20000);
 
+
+/* shared clips folder */
+let CFT = null;
+async function loadClipsFolder(){
+  let r; try { r = await api('/api/clipsfolder'); } catch (e) { return; }
+  $('#cf-path').textContent = r.path;
+  $('#cf-status').textContent = r.error || (r.busy ? r.msg : (r.msg || ''));
+  const box = $('#cf-btns'); box.innerHTML = '';
+  const choose = async body => {
+    try { const x = await api('/api/clipsfolder', body, 'POST', 300000); toast('Moving your clips to ' + x.path); clearInterval(CFT); CFT = setInterval(loadClipsFolder, 1500); }
+    catch (e) { toast(e.message); }
+  };
+  (r.suggestions || []).forEach(sg => {
+    const inUse = r.path.toLowerCase().startsWith(sg.path.toLowerCase());
+    const b = el('button', inUse ? 'btn' : 'go', inUse ? 'Using ' + sg.name : 'Use ' + sg.name); b.type = 'button'; b.disabled = inUse || r.busy;
+    if (!inUse) b.style.fontSize = '16px';
+    b.onclick = () => choose({ path: sg.path }); box.append(b);
+  });
+  const pk = el('button', 'btn', 'Choose another folder...'); pk.type = 'button'; pk.disabled = r.busy; pk.onclick = () => choose({ pick: true }); box.append(pk);
+  if (r.custom){ const rs = el('button', 'btn', 'Back to this laptop only'); rs.type = 'button'; rs.disabled = r.busy; rs.onclick = () => choose({ reset: true }); box.append(rs); }
+  if (!(r.suggestions || []).length) box.append(el('span', 'hint', 'No OneDrive or Google Drive folder found on this laptop. Install Google Drive for desktop (free) or sign in to OneDrive, then reopen this tab.'));
+  if (!r.busy && CFT){ clearInterval(CFT); CFT = null; poll(true); }
+}
 /* campaign finder */
 let FD = null;
 const PL = { youtube: 'YouTube', tiktok: 'TikTok', instagram: 'Instagram', x: 'X' };

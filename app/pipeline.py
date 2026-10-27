@@ -423,16 +423,29 @@ SWEAR_RX = re.compile(rf"(?<![\w])({_SWEARS})(?![\w])", re.I)
 ASS_RX = re.compile(r"(?<![\w])ass(?:es)?(?![\w])", re.I)
 
 
+MASKED_RX = re.compile(r"(?<![\w])\w\*{2,}\w*", re.I)  # already-starred words like f****** from older versions
+
+
 def has_swear(s: str) -> bool:
-    return bool(SWEAR_RX.search(s or "") or ASS_RX.search(s or ""))
+    s = s or ""
+    return bool(SWEAR_RX.search(s) or ASS_RX.search(s) or MASKED_RX.search(s))
 
 
 def clean_text(s: str) -> str:
-    """'fucking' -> 'f***ing'-style masking: first letter kept, rest starred."""
-    def mask(m):
-        w = m.group(0)
-        return w[0] + "*" * (len(w) - 1)
-    return ASS_RX.sub(mask, SWEAR_RX.sub(mask, s or ""))
+    """Removes sworn words completely (no f*** hints) and tidies the gaps and punctuation left behind."""
+    t = MASKED_RX.sub("", ASS_RX.sub("", SWEAR_RX.sub("", s or "")))
+    t = re.sub(r"(?<!\w)#(?=\s|$)", "", t)           # a hashtag that was all swearing
+    t = re.sub(r"\b(the|a|an|what the|holy)\s*(?=[,.!?]|$)", lambda m: "" if m.group(1).lower() in ("what the", "holy") else m.group(0), t, flags=re.I)
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    t = re.sub(r"\s+([,.!?;:])", r"\1", t)          # "word ," -> "word,"
+    t = re.sub(r"([,;:])(?:\s*[,;:])+", r"\1", t)    # ", ," -> ","
+    t = re.sub(r"(^|\n)[ \t]*[,;:.!?]+[ \t]*", r"\1", t)  # leading punctuation on a line
+    t = re.sub(r",\s*([.!?])", r"\1", t)             # ",!" -> "!"
+    return "\n".join(ln.strip(" ,;:") if ln.strip(" ,;:.!?") else "" for ln in t.split("\n")).strip()
+
+
+def is_clean_hook(s: str) -> bool:
+    return len(re.findall(r"[A-Za-z0-9']+", s or "")) >= 3 and not has_swear(s)
 
 
 def swear_spans(words: list[dict], a: float, b: float) -> list[tuple[float, float]]:
@@ -555,7 +568,11 @@ def score_candidates(segs: list[dict], loud: np.ndarray, heat: np.ndarray | None
         # mild preference for the middle of the allowed length
         mid = (min_len + max_len) / 2
         sc -= 0.02 * abs(dur - mid)
-        out.append({"start": a, "end": b, "text": text, "score": round(sc, 2), "reasons": reasons or ["clear complete thought"], "seg_i": i, "seg_j": j})
+        sworn = has_swear(text)
+        if sworn:
+            sc -= 100  # only used if the video has no clean moments at all
+        out.append({"start": a, "end": b, "text": text, "score": round(sc, 2), "reasons": reasons or ["clear complete thought"],
+                    "seg_i": i, "seg_j": j, "sworn": sworn})
     out.sort(key=lambda c: -c["score"])
     return out
 
@@ -767,6 +784,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     if hook:
         lines.append(f"Dialogue: 1,{ass_time(0)},{ass_time(min(3.2, b - a))},Hook,,0,0,0,,{{\\fad(120,200)}}{ass_escape(clean_text(hook) if clean else hook)}")
     ws = [w for w in words if w["e"] > a and w["s"] < b]
+    if clean:
+        ws = [w for w in ws if not has_swear(w["w"])]
     groups, cur = [], []
     for w in ws:
         txt = w["w"]
@@ -787,7 +806,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             e = g[wi + 1]["s"] if wi + 1 < len(g) else g_end
             parts = []
             for k, x in enumerate(g):
-                t = ass_escape(clean_text(x["w"]) if clean else x["w"])
+                t = ass_escape(x["w"])
                 t = t.upper() if upper else t
                 parts.append(f"{{\\c{hi}}}{t}{{\\c&HFFFFFF&}}" if k == wi else t)
             pop = "{\\fscx108\\fscy108\\t(0,90,\\fscx100\\fscy100)}" if wi == 0 else ""

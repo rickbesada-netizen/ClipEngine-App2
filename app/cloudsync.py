@@ -19,7 +19,7 @@ from pathlib import Path
 SYNC_URL = __import__("os").environ.get("CLIP_ENGINE_SYNC_URL") or "https://buildable-clip-factory.netlify.app/api/sync"
 
 # Settings that belong to one computer and never sync
-LOCAL_SETTINGS = {"cookies_browser", "cookies_file", "whisper_model", "max_height"}
+LOCAL_SETTINGS = {"cookies_browser", "cookies_file", "whisper_model", "max_height", "clips_folder"}
 # Clip fields that only make sense on the computer that made the clip
 LOCAL_CLIP_FIELDS = {"words", "source_path"}
 
