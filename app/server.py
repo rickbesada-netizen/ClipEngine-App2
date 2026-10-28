@@ -449,18 +449,25 @@ def process(j: dict):
     if not info["w"]:
         raise RuntimeError("Downloaded file has no video stream.")
     dur = info["duration"] or meta.get("duration") or 0
-    progress("Measuring audio", 0.3)
-    wav = P.WORK_DIR / f"{path.stem}.wav"
-    P.extract_audio(path, wav)
-    loud = P.loudness(wav)
     heat = P.heat_curve(meta.get("heatmap"), dur)
     n = int(settings["clips_per_video"])
     min_len, max_len = float(settings["min_len"]), float(settings["max_len"])
-    windows = None
-    if dur > 30 * 60:
-        windows = P.find_windows(dur, loud, heat, max(6, n * 4), max_len + 20)
-        progress(f"Long video: transcribing the {len(windows)} most promising parts", 0.3)
-    segs = P.transcribe(wav, settings["whisper_model"], windows, progress, cancel)
+    silent = not info.get("audio", True)
+    if silent:
+        # video with no sound track (e.g. a "videoplayback" file saved from YouTube): pick by on-screen action
+        progress("This video has no sound. Finding the most action-packed parts instead", 0.3)
+        loud = P.motion_curve(path, dur)
+        segs = []
+    else:
+        progress("Measuring audio", 0.3)
+        wav = P.WORK_DIR / f"{path.stem}.wav"
+        P.extract_audio(path, wav)
+        loud = P.loudness(wav)
+        windows = None
+        if dur > 30 * 60:
+            windows = P.find_windows(dur, loud, heat, max(6, n * 4), max_len + 20)
+            progress(f"Long video: transcribing the {len(windows)} most promising parts", 0.3)
+        segs = P.transcribe(wav, settings["whisper_model"], windows, progress, cancel)
     spoken = sum(len(s_["words"]) or len(s_["text"].split()) for s_ in segs)
     progress("Finding the best moments", 0.72)
     if dur and dur <= max_len + 3:
@@ -473,7 +480,9 @@ def process(j: dict):
         chosen = P.action_windows(dur, loud, heat, n, length)
         for c_ in chosen:
             c_["text"] = " ".join(s_["text"] for s_ in segs if s_["end"] > c_["start"] and s_["start"] < c_["end"])
-            if not segs:
+            if silent:
+                c_["reasons"] = ["most on-screen action", "SILENT: the source video has no sound"]
+            elif not segs:
                 c_["reasons"] = c_["reasons"] + ["no talking in this video"]
     else:
         cands = P.score_candidates(segs, loud, heat, min_len, max_len, camp.get("keywords", []))
@@ -516,7 +525,8 @@ def process(j: dict):
             DB["clips"].insert(0, clip)
         save_db()
         made += 1
-    progress(f"Done: {made} clip{'s' if made != 1 else ''}", 1.0)
+    progress(f"Done: {made} clip{'s' if made != 1 else ''}" + (". Heads up: this video had no sound, so the clips are silent. "
+             "If the campaign needs sound, get a copy of the video that has audio." if silent else ""), 1.0)
 
 
 def worker():

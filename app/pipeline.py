@@ -472,6 +472,23 @@ def extract_audio(src: Path, dst: Path) -> Path:
     return dst
 
 
+def motion_curve(path: Path, dur: float) -> np.ndarray:
+    """For videos with no sound: how much the picture changes each second, as z-scores (busy action scores high)."""
+    w, h, fps = 64, 36, 2
+    p = subprocess.run([FFMPEG, "-v", "error", "-i", str(path), "-an", "-vf", f"fps={fps},scale={w}:{h},format=gray",
+                        "-f", "rawvideo", "-"], capture_output=True, creationflags=_NO_WINDOW)
+    frames = np.frombuffer(p.stdout, dtype=np.uint8)
+    n = len(frames) // (w * h)
+    nsec = max(1, int(dur) if dur else n // fps)
+    if n < 2:
+        return np.zeros(nsec)
+    f = frames[: n * w * h].reshape(n, w * h).astype(np.float32)
+    diff = np.concatenate([[0.0], np.abs(np.diff(f, axis=0)).mean(axis=1)])
+    per_sec = np.array([diff[i * fps:(i + 1) * fps].mean() if i * fps < n else 0.0 for i in range(nsec)])
+    sd = per_sec.std() or 1.0
+    return (per_sec - per_sec.mean()) / sd
+
+
 def loudness(wav_path: Path) -> np.ndarray:
     """RMS per second, as z-scores."""
     with wave.open(str(wav_path)) as w:
