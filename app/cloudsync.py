@@ -91,6 +91,27 @@ def merge_items(local: dict, remote: dict, base: dict, prefer_remote: bool = Fal
     return out
 
 
+# A sync may delete at most this many items at once; more than that is almost certainly a fault (a damaged
+# file on one computer), not something you did, so the items are kept everywhere instead.
+MAX_DELETES = {"campaigns": 1, "clips": 10, "accounts": 2, "settings": 3}
+
+
+def guard_mass_delete(sec: str, local: dict, remote: dict, merged: dict) -> None:
+    limit = MAX_DELETES.get(sec, 5)
+    gone_here = [k for k in local if k not in merged]      # deleted on another computer
+    gone_there = [k for k in remote if k not in merged]    # deleted on this computer
+    if sec == "clips":
+        limit = max(limit, int(0.3 * max(len(local), len(remote))))
+    if len(gone_here) > limit:
+        print(f"sync: kept {len(gone_here)} {sec} another computer was about to delete (too many at once)", flush=True)
+        for k in gone_here:
+            merged[k] = local[k]
+    if len(gone_there) > limit:
+        print(f"sync: kept {len(gone_there)} {sec} missing on this computer (too many at once)", flush=True)
+        for k in gone_there:
+            merged[k] = remote[k]
+
+
 def _strip_meta(item):
     if isinstance(item, dict):
         return {k: v for k, v in item.items() if k != "_edited"}
@@ -167,6 +188,7 @@ class Sync:
                     lb = base.get(sec, {})
                     stamp_edits(local.get(sec, {}), lb, now)
                     merged[sec] = merge_items(local.get(sec, {}), remote.get(sec, {}), lb, prefer_remote=first)
+                    guard_mass_delete(sec, local.get(sec, {}), remote.get(sec, {}), merged[sec])
                 if _h(merged) == _h({sec: remote.get(sec, {}) for sec in SECTIONS}):
                     new_rev = rev  # the cloud already has exactly this: nothing to upload
                 else:

@@ -103,14 +103,30 @@ def write_campaigns_text(text: str, encoding: str = "utf-8"):
     SYNC_WAKE.set()
 
 
+_CAMP_CACHE: dict = {"list": None}
+
+
 def campaigns() -> list[dict]:
-    try:
-        lst = json.loads(CAMPAIGNS_PATH.read_text(encoding="utf-8"))
-        if isinstance(lst, list) and lst:
-            return lst
-    except Exception:  # noqa: BLE001
-        traceback.print_exc()
-    # damaged or missing: fall back to the built-in presets
+    """The campaign list. A read can fail for a moment on Windows while the file is being saved, so retry and
+    fall back to the last good copy. Only a file that stays broken is set aside (never the presets over real data)."""
+    last_err = None
+    for attempt in range(5):
+        try:
+            lst = json.loads(CAMPAIGNS_PATH.read_text(encoding="utf-8"))
+            if isinstance(lst, list) and lst:
+                _CAMP_CACHE["list"] = lst
+                return lst
+            last_err = ValueError("empty campaign list")
+        except FileNotFoundError as e:
+            last_err = e
+            if not CAMPAIGNS_PATH.with_suffix(".tmp").exists():
+                break  # really missing (first run)
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+        time.sleep(0.05 * (attempt + 1))
+    if _CAMP_CACHE["list"]:
+        return _CAMP_CACHE["list"]  # a save is in progress or the disk is busy: use the last good list
+    print("campaigns file problem:", last_err, flush=True)
     builtin = P.APP_DIR / "campaigns.json"
     lst = json.loads(builtin.read_text(encoding="utf-8"))
     try:
@@ -120,7 +136,39 @@ def campaigns() -> list[dict]:
             CAMPAIGNS_PATH.write_text(json.dumps(lst, indent=2), encoding="utf-8")
     except OSError:
         pass
+    _CAMP_CACHE["list"] = lst
     return lst
+
+
+def restore_set_aside_campaigns() -> int:
+    """Brings back campaigns from files an older version set aside by mistake (campaigns-unreadable-*.json).
+    Restored campaigns are marked as changed so sync puts them back on every computer."""
+    found = sorted(CAMPAIGNS_PATH.parent.glob("campaigns-unreadable-*.json"))
+    if not found:
+        return 0
+    lst = campaigns()
+    have = {c["id"] for c in lst}
+    added = 0
+    for f in found:
+        try:
+            old = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        for c in old if isinstance(old, list) else []:
+            if isinstance(c, dict) and c.get("id") and c["id"] not in have:
+                c["_restored"] = int(time.time())
+                lst.append(c)
+                have.add(c["id"])
+                added += 1
+        try:
+            f.replace(f.with_name(f.name.replace("unreadable", "restored")))
+        except OSError:
+            pass
+    if added:
+        write_campaigns_text(json.dumps(lst, indent=2), encoding="utf-8")
+        _CAMP_CACHE["list"] = lst
+        print(f"Restored {added} campaign(s) that were set aside by mistake", flush=True)
+    return added
 
 
 def campaign_by_id(cid: str) -> dict:
@@ -2111,6 +2159,7 @@ if __name__ == "__main__":
         if recover_clips():
             organise_clips()
         clean_old_captions()
+        restore_set_aside_campaigns()
     except Exception:  # noqa: BLE001
         traceback.print_exc()
     threading.Thread(target=worker, daemon=True).start()
