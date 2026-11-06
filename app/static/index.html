@@ -258,8 +258,9 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
         <h2>Add a campaign</h2>
         <p class="hint">Give it the campaign's brief and it fills everything in: who to clip and from where, hashtags, rules, pay, platforms and the submission deadline. Check it, fix anything, then save.</p>
         <div class="field"><label class="lbl" for="cb-file">Upload the brief (PDF, Word, screenshot or text)</label><input type="file" id="cb-file" accept=".pdf,.docx,.txt,.md,.html,.htm,.png,.jpg,.jpeg,.webp"></div>
-        <div class="field"><label class="lbl" for="cb-url">Or paste a link: Google Doc or campaign page</label>
-          <div class="row"><input type="text" id="cb-url" class="mono" style="flex:1;min-width:0" placeholder="https://docs.google.com/document/d/..."><button class="btn" id="cb-url-go" type="button">Read link</button></div></div>
+        <div class="field"><label class="lbl" for="cb-url">Or paste links, one per line: the brief (Google Doc, campaign page) and the footage (Drive folders, zips)</label>
+          <textarea id="cb-url" class="mono" rows="4" placeholder="https://docs.google.com/document/d/...&#10;https://drive.google.com/drive/folders/...&#10;https://...zip"></textarea>
+          <div class="row"><button class="btn" id="cb-url-go" type="button">Read links</button><span class="hint">Briefs get read; footage links go straight into Clip from.</span></div></div>
         <div class="field"><label class="lbl" for="cb-zip">Or upload the campaign's zip (brief, banner, footage in one)</label><input type="file" id="cb-zip" accept=".zip"></div>
         <details><summary>Or paste the text</summary><textarea id="cb-text" rows="6" style="margin-top:8px"></textarea><button class="btn" id="cb-text-go" type="button" style="margin-top:6px">Read text</button></details>
         <span class="mono" id="cb-status"></span>
@@ -870,12 +871,16 @@ async function readBrief(req){
   $('#cb-status').textContent = 'Reading the brief… scanned pages take a few seconds each.';
   try {
     const r = req instanceof FormData ? await (async () => { const x = await fetch('/api/campaigns/import', { method: 'POST', body: req }); const j = await x.json(); if (!x.ok) throw new Error(j.error || 'Failed'); return j; })()
-                                      : await api('/api/campaigns/import', req);
-    $('#cb-status').textContent = 'Done. Check the details below, then save.'; fillForm(r.campaign);
+                                      : await api('/api/campaigns/import', req, 'POST', 180000);
+    let msg = 'Done.';
+    if (r.read !== undefined) msg = 'Read ' + r.read + ' brief link' + (r.read === 1 ? '' : 's') + (r.footage ? ', added ' + r.footage + ' footage link' + (r.footage === 1 ? '' : 's') + ' to Clip from' : '') + '.';
+    if (r.notes && r.notes.length) msg += ' ' + r.notes.join(' ');
+    $('#cb-status').textContent = msg + ' Check the details below, then save.'; fillForm(r.campaign);
+    if (!r.campaign.name){ $('#cf-name').placeholder = 'Type the campaign name'; $('#cf-name').focus(); }
   } catch (e) { $('#cb-status').textContent = e.message; }
 }
 $('#cb-file').onchange = e => { const f = e.target.files[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); readBrief(fd); e.target.value = ''; };
-$('#cb-url-go').onclick = () => { const u = $('#cb-url').value.trim(); if (!/^https?:\/\//.test(u)){ toast('Paste a full link'); return; } readBrief({ url: u }); };
+$('#cb-url-go').onclick = () => { const urls = $('#cb-url').value.split(/\s+/).filter(u => /^https?:\/\//.test(u)); if (!urls.length){ toast('Paste full links, one per line'); return; } readBrief({ urls }); };
 $('#cb-text-go').onclick = () => { const t = $('#cb-text').value.trim(); if (t.length < 30){ toast('Paste more of the brief'); return; } readBrief({ text: t }); };
 $('#cb-zip').onchange = e => {
   const f = e.target.files[0]; if (!f) return; e.target.value = '';

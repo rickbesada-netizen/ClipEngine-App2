@@ -195,6 +195,7 @@ def parse(text: str) -> dict:
         if re.search(r"https?://\S+$", ln) and re.match(r"^[a-z0-9_./@?=&%-][\w./@?=&%-]*$", lines[i + 1]) and not lines[i + 1].startswith("http"):
             joined = re.search(r"https?://\S+$", ln).group(0) + lines[i + 1]
             urls = [joined if u == re.search(r"https?://\S+$", ln).group(0) else u for u in urls]
+    urls = [u for u in urls if "accounts.google.com" not in u]  # sign-in pages, not sources
     sources = [u for u in urls if re.search(SOURCE_HOSTS, u, re.I)
                or re.search(r"(drive|docs)\.google\.com/(drive/folders|file)/", u, re.I)
                or re.search(r"\.(zip|mp4|mov|mkv|webm|m4v)(\?\S*)?$", u, re.I)]

@@ -1454,6 +1454,46 @@ def apply_stage(cid: str, token: str) -> str:
 
 
 # ---------------------------------------------------------------- campaigns from briefs
+FOOTAGE_LINK_RX = re.compile(r"(drive|docs)\.google\.com/(drive/(u/\d+/)?folders|file)/|\.(zip|mp4|mov|mkv|webm|m4v)(\?\S*)?$"
+                             r"|frame\.io|f\.io/|dropbox\.com|wetransfer|mega\.nz", re.I)
+
+
+def import_from_links(urls: list):
+    """Several links at once: briefs (Google Docs, campaign pages, PDFs) are read and combined; footage links
+    (Drive folders and files, zips, videos) go straight into "Clip from" instead of being read as a brief."""
+    urls = [u.strip().strip(",") for u in urls if re.match(r"^https?://", u.strip())]
+    if not urls:
+        return jsonify(error="Paste full links (starting with https://), one per line."), 400
+    texts, footage, notes = [], [], []
+    for u in dict.fromkeys(urls):
+        if FOOTAGE_LINK_RX.search(u):
+            footage.append(u)
+            continue
+        try:
+            t = CI.text_from_url(u)
+        except Exception as e:  # noqa: BLE001
+            notes.append(f"Couldn't read {u[:60]}: {str(e)[:120]}")
+            continue
+        if re.search(r"accounts\.google\.com/(ServiceLogin|v3/signin)|Sign in - Google Accounts", t) or len(t.strip()) < 30:
+            notes.append(f"{u[:60]} needs a sign-in, so it couldn't be read. In Google, set Share to 'Anyone with the link', or download it and upload the file.")
+            continue
+        texts.append(t)
+    if texts:
+        draft = CI.parse("\n\n".join(texts))
+        st = DB["settings"]
+        if st.get("use_ollama") and st.get("ollama_model"):
+            draft = CI.refine_with_ollama("\n\n".join(texts), draft, st["ollama_model"])
+    elif footage:
+        draft = CI.parse("New campaign")
+        draft.update(name="", id="")
+        notes.append("Only footage links were pasted: type the campaign name and fill in the rest, or add the brief's link too.")
+    else:
+        return jsonify(error=" ".join(notes) or "Couldn't read any of those links."), 400
+    draft["sources"] = list(dict.fromkeys([x for x in draft.get("sources", []) if "accounts.google.com" not in x] + footage))
+    draft["exists"] = bool(draft.get("id")) and draft["id"] in {c["id"] for c in campaigns()}
+    return jsonify(campaign=draft, notes=notes, read=len(texts), footage=len(footage))
+
+
 @APP.post("/api/campaigns/import")
 def campaign_import():
     try:
@@ -1462,10 +1502,9 @@ def campaign_import():
             text = CI.text_from_file(f.filename or "brief", f.read())
         else:
             body = request.get_json(force=True) or {}
-            if body.get("url"):
-                text = CI.text_from_url(body["url"].strip())
-            else:
-                text = body.get("text", "")
+            if body.get("url") or body.get("urls"):
+                return import_from_links(body.get("urls") or str(body.get("url")).split())
+            text = body.get("text", "")
         if len(text.strip()) < 30:
             return jsonify(error="Couldn't find readable text in that. Try a PDF, a Word file, a screenshot, or paste the text."), 400
         draft = CI.parse(text)
