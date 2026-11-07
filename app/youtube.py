@@ -114,7 +114,9 @@ def status(campaign=None) -> dict:
     if token_path(key).exists():
         try:
             out["connected"] = _creds(key) is not None
-            if out["connected"] and not out["channel"]:
+            stale = (out["channel"] or "").startswith("(no channel") and time.time() - stt.get("checked", 0) > 30
+            if out["connected"] and (not out["channel"] or stale):  # re-check a missing channel: it may have been made since
+                stt["checked"] = time.time()
                 r = _service(key).channels().list(part="snippet", mine=True).execute()
                 items = r.get("items") or []
                 stt["channel"] = out["channel"] = items[0]["snippet"]["title"] if items else "(no channel on this Google account)"
@@ -123,6 +125,7 @@ def status(campaign=None) -> dict:
         except Exception as e:  # noqa: BLE001
             out["error"] = f"Connection expired: {str(e)[:150]}. Press Connect again."
             out["connected"] = False
+    out["no_channel"] = bool(out["connected"] and (out["channel"] or "").startswith("(no channel"))
     main = _names().get("__main__", {})
     out["main_channel"] = main.get("name") if TOKEN.exists() else None
     out["email"] = (_names().get(_key(key)) or {}).get("email")

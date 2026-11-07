@@ -736,7 +736,9 @@ function clipCard(c){
 
   const up = el('div', 'row');
   const yu = c.yt_upload || {};
-  if (YTS && YTS.connected && c.here !== false){
+  if (YTS && YTS.no_channel && c.here !== false){
+    up.append(el('span', 'notice', 'No YouTube channel on ' + (YTS.email || 'this campaign\u2019s Google account') + ' yet. Sign in to youtube.com with it, press your profile picture > Create a channel, and the upload button appears here.'));
+  } else if (YTS && YTS.connected && c.here !== false){
     const yb = el('button', 'btn', yu.state === 'uploading' ? 'Uploading to YouTube ' + Math.round((yu.progress || 0) * 100) + '%' : 'Upload to ' + (YTS.channel || 'YouTube')); yb.type = 'button';
     yb.disabled = yu.state === 'uploading';
     yb.onclick = () => api('/api/clips/' + c.id + '/youtube', {}).then(() => { toast('Uploading to YouTube'); poll(true); }).catch(e => toast(e.message));

@@ -1296,7 +1296,15 @@ def yt_upload(cid):
                     if r["privacy"] == "public":
                         c["status"] = "posted"
         except Exception as e:  # noqa: BLE001
-            c["yt_upload"] = {"state": "error", "error": str(e)[:300]}
+            msg = str(e)
+            if "youtubeSignupRequired" in msg:
+                msg = ("This campaign's Google account has no YouTube channel yet. Sign in to youtube.com with that account, "
+                       "press your profile picture > Create a channel, then try again.")
+            elif "quotaExceeded" in msg:
+                msg = "YouTube's daily upload limit for your Google project is used up. It resets at midnight US Pacific time."
+            elif "uploadLimitExceeded" in msg:
+                msg = "This YouTube channel has hit its daily upload limit. Try again tomorrow."
+            c["yt_upload"] = {"state": "error", "error": msg[:300]}
         save_db()
 
     threading.Thread(target=run, daemon=True).start()
