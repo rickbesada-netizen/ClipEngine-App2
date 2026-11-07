@@ -377,6 +377,25 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
           <div class="row"><button class="btn" id="sync-go" type="button">Sync now</button><button class="btn" id="sync-out-btn" type="button">Sign out</button></div>
         </div>
       </div>
+      <div class="panel" style="grid-column:1/-1" id="meta-panel">
+        <h2>Post to Instagram and Facebook from Clip Engine</h2>
+        <p class="hint">Each campaign posts Reels to its own client's Instagram account and Facebook Page. Uses your own free Meta developer app (one-time setup below), and videos upload straight from this laptop.</p>
+        <div id="meta-camps"></div>
+        <details id="meta-setup"><summary>One-time setup (about 15 minutes, free)</summary>
+          <ol class="steps">
+            <li>Open <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">Meta for Developers</a>, log in with your Facebook, press <b>Create app</b>. Name it <b>Clip Engine</b>. For the use case choose <b>Other</b>, then app type <b>Business</b>, and create it.</li>
+            <li>In the app, add the products <b>Facebook Login for Business</b> and <b>Instagram</b> (Instagram API with Facebook login).</li>
+            <li>Under Facebook Login for Business &gt; Settings, in <b>Valid OAuth Redirect URIs</b> paste <span class="mono" id="meta-relay"></span> and save.</li>
+            <li>Under App settings &gt; Basic, fill in: Privacy policy URL <span class="mono">https://buildable-clip-factory.netlify.app/privacy.html</span>, Terms of service URL <span class="mono">https://buildable-clip-factory.netlify.app/terms.html</span>, User data deletion URL <span class="mono">https://buildable-clip-factory.netlify.app/data-deletion.html</span>, a category, and an app icon. Save.</li>
+            <li>Copy the <b>App ID</b> and <b>App Secret</b> (press Show) from that same page into here:
+              <div class="row"><input id="meta-id" class="mono" placeholder="App ID" style="min-width:180px"><input id="meta-secret" class="mono" type="password" placeholder="App Secret" style="min-width:260px"><button class="btn" id="meta-save" type="button">Save</button></div></li>
+            <li>Under <b>App roles &gt; Roles</b>, add each client's Facebook account (as Tester). They accept at <a href="https://developers.facebook.com/requests" target="_blank" rel="noopener">developers.facebook.com/requests</a>. Meta only lets accounts with a role use your app.</li>
+            <li>Switch the app to <b>Live</b> (the toggle at the top of the app dashboard), so posts are public.</li>
+            <li>Each client's Instagram must be a <b>Professional</b> account (Business or Creator) linked to their Facebook Page. Then press <b>Connect Facebook &amp; Instagram</b> next to the campaign, sign in with the client's Facebook, and leave every Page and permission ticked.</li>
+          </ol>
+        </details>
+        <p class="notice">TikTok is not here on purpose: TikTok keeps every post from an unreviewed app private, so use the TikTok upload button on each clip. X charges per post through its API.</p>
+      </div>
       <div class="panel" style="grid-column:1/-1">
         <h2>Upload to YouTube from Clip Engine</h2>
         <div id="yt-state"></div>
@@ -428,7 +447,7 @@ let skew = 0;
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-selected', x === b));
   ['make', 'clips', 'accounts', 'rules', 'discover', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== b.dataset.tab);
-  if (b.dataset.tab === 'settings') { loadOllama(); loadYT(); loadClipsFolder(); }
+  if (b.dataset.tab === 'settings') { loadOllama(); loadYT(); loadClipsFolder(); loadMeta(); }
   if (b.dataset.tab === 'discover') { loadFinder(true); }
   if (b.dataset.tab === 'rules') { loadBranding(); }
   if (b.dataset.tab === 'accounts') loadAccounts();
@@ -655,7 +674,7 @@ function renderClips(force){
   const mine = S.clips.filter(c => campaign && c.campaign === campaign.id);
   const list = mine.filter(c => filter === 'all' || c.status === filter);
   $('#n-clips').textContent = mine.length ? String(mine.length) : '';
-  const sig = JSON.stringify([filter, campaign && campaign.id, list.map(c => [c.id, c.file, c.here, c.caption, c.needs_recut, c.swear_note, c.status, (c.posts || []).length, (c.posts || []).filter(p => p.submitted).length, JSON.stringify(c.yt_upload || {}), !!c.yt_batch]), !!(YTS && YTS.connected)]);
+  const sig = JSON.stringify([filter, campaign && campaign.id, list.map(c => [c.id, c.file, c.here, c.caption, c.needs_recut, c.swear_note, JSON.stringify(c.social || {}), c.status, (c.posts || []).length, (c.posts || []).filter(p => p.submitted).length, JSON.stringify(c.yt_upload || {}), !!c.yt_batch]), !!(YTS && YTS.connected)]);
   renderDue();
   if (sig === clipSig && !force) return;
   if (!force && document.activeElement && document.activeElement.id && document.activeElement.id.startsWith('cap-')) return;
@@ -720,9 +739,26 @@ function clipCard(c){
     yb.onclick = () => api('/api/clips/' + c.id + '/youtube', {}).then(() => { toast('Uploading to YouTube'); poll(true); }).catch(e => toast(e.message));
     up.append(yb);
   }
+  const ms = MS && MS[c.campaign];
+  if (ms && ms.connected && c.here !== false){
+    const so = c.social || {};
+    [['instagram', ms.instagram ? 'Post to Instagram @' + ms.instagram : null], ['facebook', 'Post to Facebook (' + ms.page + ')']].forEach(([pf, label]) => {
+      if (!label) return;
+      const st = so[pf] || {};
+      const b = el('button', 'btn', st.state === 'uploading' ? 'Posting ' + Math.round((st.progress || 0) * 100) + '%' : st.state === 'done' ? label.replace('Post to', 'Posted to') : label); b.type = 'button';
+      b.disabled = st.state === 'uploading';
+      b.onclick = () => api('/api/clips/' + c.id + '/social', { platform: pf }).then(() => { toast('Posting to ' + (pf === 'instagram' ? 'Instagram' : 'Facebook')); poll(true); }).catch(e => toast(e.message));
+      up.append(b);
+    });
+  }
   [['YouTube Studio', 'https://studio.youtube.com'], ['TikTok upload', 'https://www.tiktok.com/upload'], ['Instagram', 'https://www.instagram.com']].forEach(([t, u]) => { const a = el('a', 'btn', t); a.href = u; a.target = '_blank'; a.rel = 'noopener'; up.append(a); });
   m.append(up);
   if (yu.state === 'error') m.append(el('p', 'bad-line', 'YouTube upload failed: ' + yu.error));
+  Object.entries(c.social || {}).forEach(([pf, st]) => {
+    const nm = pf === 'instagram' ? 'Instagram' : 'Facebook';
+    if (st.state === 'error') m.append(el('p', 'bad-line', nm + ' post failed: ' + st.error));
+    if (st.state === 'done') m.append(el('p', 'ok-line', 'On ' + nm + ': ' + st.url));
+  });
   if (yu.state === 'done') m.append(el('p', yu.locked ? 'bad-line' : 'ok-line', yu.locked ? 'Uploaded, but YouTube kept it private until your API audit is approved. Delete it in Studio and upload there for now.' : 'On YouTube (' + yu.privacy + '): ' + yu.url));
 
   const posts = el('div', 'posts');
@@ -1074,6 +1110,40 @@ async function loadClipsFolder(){
   if (!(r.suggestions || []).length) box.append(el('span', 'hint', 'No OneDrive or Google Drive folder found on this laptop. Install Google Drive for desktop (free) or sign in to OneDrive, then reopen this tab.'));
   if (!r.busy && CFT){ clearInterval(CFT); CFT = null; poll(true); }
 }
+
+/* Instagram and Facebook */
+let MS = null;
+async function loadMeta(){
+  let r; try { r = await api('/api/meta'); } catch (e) { return; }
+  MS = {}; r.campaigns.forEach(c => { MS[c.id] = c; });
+  $('#meta-relay').textContent = r.relay;
+  if (r.app_id) $('#meta-id').value = r.app_id;
+  $('#meta-setup').open = !r.has_app;
+  const box = $('#meta-camps'); box.innerHTML = '';
+  if (!r.has_app){ box.append(el('p', 'hint', 'Not set up yet. Follow the one-time setup below.')); return; }
+  const tbl = el('div', 'ytc');
+  r.campaigns.forEach(c => {
+    const row = el('div', 'row ytc-row');
+    row.append(el('b', '', c.name));
+    if (c.connected) row.append(el('span', 'ok-line', 'Facebook Page ' + c.page + (c.instagram ? ' + Instagram @' + c.instagram : ' (no Instagram linked)')));
+    else if (c.choices.length) row.append(el('span', 'hint', 'Signed in as ' + c.user + '. Pick the Page:'));
+    else row.append(el('span', 'hint', 'not connected yet'));
+    if (c.choices.length){
+      const sel = el('select'); sel.append(new Option('Choose a Page...', ''));
+      c.choices.forEach(p => sel.append(new Option(p.name + (p.instagram ? ' (Instagram @' + p.instagram + ')' : ''), p.id)));
+      sel.onchange = () => sel.value && api('/api/meta/choose', { campaign: c.id, page_id: sel.value }).then(loadMeta).catch(e => toast(e.message));
+      row.append(sel);
+    }
+    const go = el('button', c.connected ? 'btn' : 'go', c.connected ? 'Change account' : 'Connect Facebook & Instagram'); go.type = 'button'; if (!c.connected) go.style.fontSize = '15px';
+    go.onclick = () => api('/api/meta/connect', { campaign: c.id }).then(x => { toast('Sign in on the Facebook tab with ' + c.name + '\u2019s account'); window.open(x.url, '_blank'); let n = 0; const t = setInterval(() => { loadMeta(); if (++n > 40) clearInterval(t); }, 3000); }).catch(e => toast(e.message));
+    row.append(go);
+    if (c.connected || c.choices.length){ const off = el('button', 'btn', 'Disconnect'); off.type = 'button'; off.onclick = () => api('/api/meta/disconnect', { campaign: c.id }).then(loadMeta); row.append(off); }
+    tbl.append(row);
+  });
+  box.append(tbl);
+}
+$('#meta-save').onclick = () => api('/api/meta/app', { app_id: $('#meta-id').value, app_secret: $('#meta-secret').value }).then(() => { $('#meta-secret').value = ''; toast('Saved. Now connect each campaign.'); loadMeta(); }).catch(e => toast(e.message));
+loadMeta();
 /* campaign finder */
 let FD = null;
 const PL = { youtube: 'YouTube', tiktok: 'TikTok', instagram: 'Instagram', x: 'X' };

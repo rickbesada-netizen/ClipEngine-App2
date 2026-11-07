@@ -11,6 +11,7 @@ if getattr(_sys, "frozen", False) and (_sys.stdout is None or _sys.stderr is Non
     _log = open(_log_dir / "clip-engine.log", "a", encoding="utf-8", buffering=1)
     _sys.stdout = _sys.stderr = _log
 
+import html
 import json
 import os
 import re
@@ -29,6 +30,7 @@ from flask import Flask, jsonify, request, send_from_directory
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pipeline as P  # noqa: E402
 import youtube as YT  # noqa: E402
+import meta as META  # noqa: E402
 import campaign_import as CI  # noqa: E402
 import kit as KIT  # noqa: E402
 import cloudsync as CS  # noqa: E402
@@ -44,6 +46,7 @@ if getattr(sys, "frozen", False):
         CAMPAIGNS_PATH.write_text((P.APP_DIR / "campaigns.json").read_text(encoding="utf-8"), encoding="utf-8")
 LOCK = threading.RLock()
 PORT = int(os.environ.get("CLIP_ENGINE_PORT", "5050"))
+RUN_PORT = PORT
 try:
     from build_info import BUILD  # written by the Windows build: every build gets its own number
 except Exception:  # noqa: BLE001
@@ -1265,6 +1268,108 @@ def yt_upload(cid):
     return jsonify(ok=True)
 
 
+# ---------------------------------------------------------------- Instagram and Facebook (per campaign)
+@APP.get("/api/meta")
+def meta_status():
+    cfg = META.app_config()
+    return jsonify(has_app=bool(cfg.get("app_id")), app_id=cfg.get("app_id", ""), relay=META.RELAY,
+                   campaigns=[{"id": c["id"], "name": c["name"], **META.public_status(c["id"])} for c in campaigns()])
+
+
+@APP.post("/api/meta/app")
+def meta_app():
+    b = request.get_json(force=True) or {}
+    try:
+        META.save_app(b.get("app_id", ""), b.get("app_secret", ""))
+    except META.MetaError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(ok=True)
+
+
+@APP.post("/api/meta/connect")
+def meta_connect():
+    cid = (request.get_json(force=True) or {}).get("campaign")
+    try:
+        url = META.login_url(campaign_by_id(cid)["id"], RUN_PORT)
+    except META.MetaError as e:
+        return jsonify(error=str(e)), 400
+    try:
+        webbrowser.open(url)
+    except Exception:  # noqa: BLE001
+        pass
+    return jsonify(ok=True, url=url)
+
+
+@APP.get("/oauth/meta")
+def meta_callback():
+    page = """<!doctype html><meta charset="utf-8"><title>Clip Engine</title><body style="font:17px system-ui;max-width:560px;margin:60px auto;padding:0 16px">{}</body>"""
+    if request.args.get("error"):
+        msg = request.args.get("error_description") or request.args.get("error")
+        return page.format(f"<h2>Not connected</h2><p>{html.escape(msg)}</p><p>Close this tab and press Connect again in Clip Engine.</p>")
+    try:
+        cid = META.finish_login(request.args.get("code", ""), request.args.get("state", ""))
+        st = META.public_status(cid)
+    except META.MetaError as e:
+        return page.format(f"<h2>Not connected</h2><p>{html.escape(str(e))}</p>")
+    name = campaign_by_id(cid)["name"]
+    if st["choices"]:
+        return page.format(f"<h2>Almost done</h2><p>Signed in for <b>{html.escape(name)}</b>. That account has several Facebook Pages: "
+                           "go back to Clip Engine (Settings) and pick which Page this campaign posts to.</p>")
+    ig = f" and Instagram @{html.escape(st['instagram'])}" if st["instagram"] else " (no Instagram account is linked to this Page)"
+    return page.format(f"<h2>Connected</h2><p><b>{html.escape(name)}</b> now posts to the Facebook Page "
+                       f"<b>{html.escape(st['page'])}</b>{ig}.</p><p>You can close this tab.</p>")
+
+
+@APP.post("/api/meta/choose")
+def meta_choose():
+    b = request.get_json(force=True) or {}
+    try:
+        META.choose_page(b.get("campaign", ""), b.get("page_id", ""))
+    except META.MetaError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(ok=True)
+
+
+@APP.post("/api/meta/disconnect")
+def meta_disconnect():
+    META.disconnect((request.get_json(force=True) or {}).get("campaign", ""))
+    return jsonify(ok=True)
+
+
+@APP.post("/api/clips/<cid>/social")
+def social_post(cid):
+    """Posts a clip to Instagram Reels or a Facebook Page as Reels, from the campaign's own account."""
+    c = clip_by_id(cid)
+    if not c:
+        return jsonify(error="Not found"), 404
+    platform = (request.get_json(force=True) or {}).get("platform")
+    if platform not in ("instagram", "facebook"):
+        return jsonify(error="Unknown platform"), 400
+    if not clip_path(c).exists():
+        return jsonify(error="The video file isn't on this laptop."), 400
+    social = c.setdefault("social", {})
+    if (social.get(platform) or {}).get("state") == "uploading":
+        return jsonify(error="Already posting"), 400
+    social[platform] = {"state": "uploading", "progress": 0}
+    label = {"instagram": "Instagram Reels", "facebook": "Facebook Reels"}[platform]
+
+    def run():
+        try:
+            fn = META.post_instagram if platform == "instagram" else META.post_facebook
+            r = fn(c["campaign"], clip_path(c), c.get("caption", ""), lambda f: social[platform].update(progress=round(f, 3)))
+            with LOCK:
+                social[platform] = {"state": "done", "progress": 1, **r}
+                c["posts"].append({"platform": label, "url": r["url"], "at": time.time(), "auto": True})
+                c["status"] = "posted"
+        except Exception as e:  # noqa: BLE001
+            social[platform] = {"state": "error", "error": str(e)[:400]}
+        save_db()
+
+    threading.Thread(target=run, daemon=True).start()
+    save_db()
+    return jsonify(ok=True)
+
+
 # ---------------------------------------------------------------- campaign branding files and zips
 def _save_stream(dest_dir: Path, name: str) -> Path:
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", Path(name or "file").name).strip() or "file"
@@ -2209,6 +2314,7 @@ if __name__ == "__main__":
     SYNC_WAKE.set()
     url = f"http://127.0.0.1:{port}"
     from werkzeug.serving import make_server
+    globals()["RUN_PORT"] = port
     srv = make_server("127.0.0.1", port, APP, threaded=True)
     print(f"Clip Engine is running at {url}", flush=True)
     if not os.environ.get("CLIP_ENGINE_NO_BROWSER"):
