@@ -83,6 +83,7 @@ h2{font-family:var(--display);font-weight:700;font-size:21px;text-transform:uppe
 .fd .desc{font-size:13px;color:var(--muted);white-space:pre-wrap;max-height:4.2em;overflow:hidden;word-break:break-word}
 .fd .row{flex-wrap:wrap}
 .brand-box{display:flex;flex-direction:column;gap:8px}.brand-box .row{gap:8px;align-items:center;flex-wrap:wrap}.brand-prev{max-width:100%;max-height:90px;object-fit:contain;align-self:flex-start;border:1px solid var(--line);border-radius:4px;background:#222}
+.signin-box{border:2px solid var(--accent);border-radius:6px;padding:12px;margin:10px 0;display:flex;flex-direction:column;gap:8px}.signin-box .row{gap:8px;flex-wrap:nowrap}
 .ytc{display:flex;flex-direction:column;gap:6px}.ytc-row{gap:10px;align-items:center;flex-wrap:wrap}.ytc-row b{min-width:120px}
 .elsewhere{width:190px;max-width:100%;aspect-ratio:9/16;border:1px dashed var(--line);border-radius:6px;display:flex;align-items:center;justify-content:center;text-align:center;padding:12px;font-size:13px;color:var(--muted);box-sizing:border-box}
 .clip video{width:190px;max-width:100%;aspect-ratio:9/16;background:#000;border-radius:6px;object-fit:cover}
@@ -381,6 +382,7 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
         <h2>Post to Instagram and Facebook from Clip Engine</h2>
         <p class="hint">Each campaign posts Reels to its own client's Instagram account and Facebook Page. Uses your own free Meta developer app (one-time setup below), and videos upload straight from this laptop.</p>
         <div id="meta-camps"></div>
+        <div id="meta-signin"></div>
         <details id="meta-setup"><summary>One-time setup (about 15 minutes, free)</summary>
           <ol class="steps">
             <li>Open <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">Meta for Developers</a>, log in with your Facebook, press <b>Create app</b>. Name it <b>Clip Engine</b>. For the use case choose <b>Other</b>, then app type <b>Business</b>, and create it.</li>
@@ -402,6 +404,7 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
         <div class="row"><span class="lbl" style="margin:0">Default channel (optional)</span><button class="btn" id="yt-connect" type="button">Connect a default channel</button><button class="btn" id="yt-disconnect" type="button" hidden>Disconnect</button>
           <label class="lbl" for="s-ytpriv" style="margin-left:8px">Upload as</label><select id="s-ytpriv"><option value="public">Public</option><option value="unlisted">Unlisted</option><option value="private">Private</option></select></div>
         <div id="yt-camps"></div>
+        <div id="yt-signin"></div>
         <details id="yt-setup"><summary>One-time setup (about 10 minutes, free)</summary>
           <ol class="steps" style="margin-top:10px">
             <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud</a> signed in with the Google account that owns your clip channel, and create a project called <b>Clip Engine</b>.</li>
@@ -960,13 +963,39 @@ async function refreshCampaigns(selectId){
 
 /* youtube */
 let YTS = null;
+
+/* sign-in links: open here, or copy for a partner on another laptop or phone */
+function startSignin(boxSel, apiPath, body, who, platform, after){
+  const w = window.open('about:blank', '_blank');  // opened during the click, so the browser doesn't block it
+  api(apiPath, body).then(r => {
+    if (w && !w.closed) w.location.href = r.url;
+    showSignin(boxSel, r.url, who, platform);
+    let n = 0; const t = setInterval(() => { after(); if (++n > 60) clearInterval(t); }, 3000);
+  }).catch(e => { if (w) w.close(); toast(e.message); });
+}
+function showSignin(boxSel, url, who, platform){
+  const box = $(boxSel); box.innerHTML = ''; box.className = 'signin-box';
+  box.append(el('b', '', platform + ' sign-in for ' + who));
+  box.append(el('p', 'hint', 'A sign-in tab should have opened. If not, or if your partner should sign in on their own laptop or phone, copy this link and send it to them:'));
+  const r1 = el('div', 'row'); const inp = el('input', 'mono'); inp.readOnly = true; inp.value = url; inp.style.flex = '1'; inp.style.minWidth = '0';
+  const cp = el('button', 'go', 'Copy link'); cp.type = 'button'; cp.style.fontSize = '15px';
+  cp.onclick = () => { navigator.clipboard.writeText(url).then(() => toast('Link copied. Send it to whoever owns the account.'), () => { inp.select(); document.execCommand('copy'); toast('Link copied'); }); };
+  const op = el('a', 'btn', 'Open here'); op.href = url; op.target = '_blank'; op.rel = 'noopener';
+  r1.append(inp, cp, op); box.append(r1);
+  box.append(el('p', 'hint', 'On another laptop or phone: after they sign in and allow access, their browser ends on a page that won\u2019t load (\u201cThis site can\u2019t be reached\u201d). That\u2019s expected. They copy the whole address from the address bar and send it back. Paste it here within 10 minutes:'));
+  const r2 = el('div', 'row'); const back = el('input', 'mono'); back.placeholder = 'http://127.0.0.1:5050/oauth/...?code=...'; back.style.flex = '1'; back.style.minWidth = '0';
+  const fin = el('button', 'btn', 'Finish connecting'); fin.type = 'button';
+  fin.onclick = () => api('/api/oauth/finish', { url: back.value }).then(x => { toast(x.campaign + ' is connected to ' + x.platform); box.innerHTML = ''; box.className = ''; loadYT(); loadMeta(); }).catch(e => toast(e.message));
+  r2.append(back, fin); box.append(r2);
+  box.append(el('p', 'hint', 'The link only works with this Clip Engine and expires after an hour. Press Connect again for a new one.'));
+}
 async function loadYT(){
   try { YTS = await api('/api/youtube' + (campaign ? '?campaign=' + encodeURIComponent(campaign.id) : '')); } catch (e) { return; }
   const st = $('#yt-state'); st.innerHTML = '';
   if (YTS.main_channel) st.append(el('p', 'ok-line', 'Default channel: ' + YTS.main_channel + '. Campaigns without their own account upload here.'));
   else if (!YTS.has_secret) st.append(el('p', 'hint', 'Not set up yet. Follow the one-time setup below.'));
   else st.append(el('p', 'hint', 'Ready. Connect each campaign to its own Google account below (a default channel is optional).'));
-  if (YTS.connecting) st.append(el('p', 'hint', 'Waiting for you in the Google tab that opened: sign in with the right Google account (use "Use another account" for a different client), allow access, and pick the channel if it asks.'));
+  if (YTS.connecting) st.append(el('p', 'hint', 'Waiting for the sign-in (use the link below): sign in with the right Google account (\u201cUse another account\u201d for a different client), allow access, and pick the channel if it asks.'));
   if (YTS.error) st.append(el('p', 'bad-line', YTS.error));
   $('#yt-connect').hidden = !!YTS.main_channel; $('#yt-disconnect').hidden = !YTS.main_channel;
   $('#yt-setup').open = !YTS.has_secret;
@@ -978,7 +1007,7 @@ async function loadYT(){
       const row = el('div', 'row ytc-row');
       row.append(el('b', '', c.name), el('span', c.own ? 'ok-line' : 'hint', c.own ? 'uploads to ' + c.channel : (c.channel ? 'not connected yet, so it uses the default channel (' + c.channel + ')' : 'not connected yet')));
       const go = el('button', c.own ? 'btn' : 'go', c.own ? 'Change account' : 'Connect its Google account'); if (!c.own) go.style.fontSize = '15px'; go.type = 'button';
-      go.onclick = () => api('/api/youtube/connect', { campaign: c.id, own: true }).then(() => { toast('Sign in on the Google tab with ' + c.name + '\u2019s Google account'); setTimeout(loadYT, 1500); }).catch(e => toast(e.message));
+      go.onclick = () => startSignin('#yt-signin', '/api/youtube/connect', { campaign: c.id, own: true }, c.name, 'YouTube (Google)', loadYT);
       row.append(go);
       if (c.own){ const off = el('button', 'btn', 'Disconnect'); off.type = 'button'; off.onclick = () => api('/api/youtube/disconnect', { campaign: c.id, own: true }).then(loadYT); row.append(off); }
       tbl.append(row);
@@ -993,7 +1022,7 @@ $('#yt-file').onchange = async e => {
   try { await api('/api/youtube/secret', { text: await f.text() }); toast('Google file added'); loadYT(); } catch (err) { toast(err.message); }
   e.target.value = '';
 };
-$('#yt-connect').onclick = () => api('/api/youtube/connect', {}).then(() => { toast('Sign in on the Google tab that opened'); setTimeout(loadYT, 1500); }).catch(e => toast(e.message));
+$('#yt-connect').onclick = () => startSignin('#yt-signin', '/api/youtube/connect', {}, 'the default channel', 'YouTube (Google)', loadYT);
 $('#yt-disconnect').onclick = () => api('/api/youtube/disconnect', {}).then(loadYT);
 $('#s-ytpriv').onchange = () => api('/api/settings', { settings: { youtube_privacy: $('#s-ytpriv').value } }).then(() => toast('Saved'));
 
@@ -1135,7 +1164,7 @@ async function loadMeta(){
       row.append(sel);
     }
     const go = el('button', c.connected ? 'btn' : 'go', c.connected ? 'Change account' : 'Connect Facebook & Instagram'); go.type = 'button'; if (!c.connected) go.style.fontSize = '15px';
-    go.onclick = () => api('/api/meta/connect', { campaign: c.id }).then(x => { toast('Sign in on the Facebook tab with ' + c.name + '\u2019s account'); window.open(x.url, '_blank'); let n = 0; const t = setInterval(() => { loadMeta(); if (++n > 40) clearInterval(t); }, 3000); }).catch(e => toast(e.message));
+    go.onclick = () => startSignin('#meta-signin', '/api/meta/connect', { campaign: c.id }, c.name, 'Facebook & Instagram', loadMeta);
     row.append(go);
     if (c.connected || c.choices.length){ const off = el('button', 'btn', 'Disconnect'); off.type = 'button'; off.onclick = () => api('/api/meta/disconnect', { campaign: c.id }).then(loadMeta); row.append(off); }
     tbl.append(row);

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 import re
 import threading
 from pathlib import Path
@@ -89,7 +91,8 @@ def status(campaign=None) -> dict:
     pending = _state(campaign) if campaign else stt  # a campaign connecting its own channel
     out = {"has_secret": SECRET.exists(), "connected": False, "channel": stt.get("channel"),
            "channel_id": stt.get("channel_id"), "can_brand": _granted_branding(key), "own": key is not None,
-           "connecting": pending["connecting"] or stt["connecting"], "error": pending["error"] or stt["error"]}
+           "connecting": any(x.get("connecting") and time.time() - x.get("started", 0) < 900 for x in (pending, stt)),
+           "error": pending["error"] or stt["error"]}
     if token_path(key).exists():
         try:
             out["connected"] = _creds(key) is not None
@@ -136,34 +139,66 @@ def save_secret(text: str) -> None:
     _STATES.clear()
 
 
-def connect_async(key=None) -> None:
-    """Opens Google's sign-in in the browser; runs in the background until the user approves.
-    key = a campaign id to give that campaign its own channel, or None for the main channel.
-    Google shows a channel picker when the account has several channels (Brand Accounts)."""
+_FLOWS: dict = {}  # state -> {"flow", "key", "at"}
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")  # Google may return the scopes in a different set/order: not an error
+
+
+def start_connect(key, port: int) -> str:
+    """Returns Google's sign-in link for a campaign (key) or the default channel (None). Google sends the answer to
+    http://127.0.0.1:<port>/oauth/google on the laptop running Clip Engine. Signed in on another laptop or phone,
+    that page won't load there, but its address holds the answer: pasting it into Clip Engine finishes the job
+    (finish_from_url)."""
     if not SECRET.exists():
         raise RuntimeError("Add your client secret JSON first.")
+    from google_auth_oauthlib.flow import Flow
+
+    flow = Flow.from_client_secrets_file(str(SECRET), SCOPES, redirect_uri=f"http://127.0.0.1:{port}/oauth/google",
+                                         autogenerate_code_verifier=True)
+    url, state = flow.authorization_url(access_type="offline", prompt="consent select_account", include_granted_scopes="true")
+    now = time.time()
+    for s_, v in list(_FLOWS.items()):
+        if now - v["at"] > 3600:
+            _FLOWS.pop(s_, None)
+    _FLOWS[state] = {"flow": flow, "key": key, "at": now}
+    _state(key).update(connecting=True, error=None, channel=None, channel_id=None, started=now)
+    return url
+
+
+def finish(code: str, state: str):
+    """Swaps Google's one-time code for a lasting sign-in. Returns the campaign key."""
+    pend = _FLOWS.pop(state, None)
+    if not pend:
+        raise RuntimeError("That sign-in link is old or came from another Clip Engine. Press Connect again and use the new link.")
+    key = pend["key"]
     stt = _state(key)
-    with _LOCK:
-        if stt["connecting"]:
-            return
-        stt.update(connecting=True, error=None, channel=None, channel_id=None)
+    try:
+        pend["flow"].fetch_token(code=code)
+        creds = pend["flow"].credentials
+        tp = token_path(key)
+        tp.parent.mkdir(parents=True, exist_ok=True)
+        tp.write_text(creds.to_json(), encoding="utf-8")
+        stt.update(error=None, channel=None, channel_id=None)
+    except Exception as e:  # noqa: BLE001
+        stt["error"] = f"Connecting failed: {str(e)[:200]}"
+        raise RuntimeError(stt["error"]) from e
+    finally:
+        stt["connecting"] = False
+    return key
 
-    def run():
-        try:
-            from google_auth_oauthlib.flow import InstalledAppFlow
 
-            flow = InstalledAppFlow.from_client_secrets_file(str(SECRET), SCOPES)
-            creds = flow.run_local_server(port=0, open_browser=True, prompt="consent select_account",
-                                          success_message="YouTube is connected to Clip Engine. You can close this tab.")
-            tp = token_path(key)
-            tp.parent.mkdir(parents=True, exist_ok=True)
-            tp.write_text(creds.to_json(), encoding="utf-8")
-        except Exception as e:  # noqa: BLE001
-            stt["error"] = f"Connecting failed: {str(e)[:200]}"
-        finally:
-            stt["connecting"] = False
+def finish_from_url(url: str):
+    from urllib.parse import parse_qs, urlparse
 
-    threading.Thread(target=run, daemon=True).start()
+    q = parse_qs(urlparse(url.strip()).query)
+    if q.get("error"):
+        raise RuntimeError(f"Google said: {q['error'][0]}. Press Connect and try again.")
+    if not q.get("code") or not q.get("state"):
+        raise RuntimeError("That isn't the address from the sign-in page. Copy the whole address (it contains code=...).")
+    return finish(q["code"][0], q["state"][0])
+
+
+def connect_async(key=None) -> None:  # older callers
+    raise RuntimeError("Use start_connect")
 
 
 def disconnect(key=None) -> None:

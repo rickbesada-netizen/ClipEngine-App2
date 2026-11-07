@@ -1204,10 +1204,46 @@ def yt_secret():
 def yt_connect():
     body = request.get_json(force=True) or {}
     try:
-        YT.connect_async(body.get("campaign") if body.get("own") else None)
+        url = YT.start_connect(body.get("campaign") if body.get("own") else None, RUN_PORT)
     except Exception as e:  # noqa: BLE001
         return jsonify(error=str(e)), 400
-    return jsonify(ok=True)
+    return jsonify(ok=True, url=url)
+
+
+OAUTH_PAGE = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Clip Engine</title>
+<body style="font:17px/1.6 system-ui;max-width:560px;margin:60px auto;padding:0 16px">{}</body>"""
+
+
+@APP.get("/oauth/google")
+def google_callback():
+    if request.args.get("error"):
+        return OAUTH_PAGE.format(f"<h2>Not connected</h2><p>Google said: {html.escape(request.args['error'])}. Close this tab and press Connect again.</p>")
+    try:
+        key = YT.finish(request.args.get("code", ""), request.args.get("state", ""))
+    except Exception as e:  # noqa: BLE001
+        return OAUTH_PAGE.format(f"<h2>Not connected</h2><p>{html.escape(str(e))}</p>")
+    who = campaign_by_id(key)["name"] if key else "The default channel"
+    return OAUTH_PAGE.format(f"<h2>Connected</h2><p><b>{html.escape(who)}</b> can now upload to YouTube. You can close this tab.</p>")
+
+
+@APP.post("/api/oauth/finish")
+def oauth_finish():
+    """A sign-in done on another laptop or phone: the address of the page it ended on (which didn't load there)."""
+    url = ((request.get_json(force=True) or {}).get("url") or "").strip()
+    try:
+        if "/oauth/google" in url:
+            key = YT.finish_from_url(url)
+            return jsonify(ok=True, platform="YouTube", campaign=campaign_by_id(key)["name"] if key else "default channel")
+        if "/oauth/meta" in url or "oauth/meta.html" in url:
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(url).query)
+            if q.get("error"):
+                raise RuntimeError(q.get("error_description", q["error"])[0])
+            cid = META.finish_login(q.get("code", [""])[0], q.get("state", [""])[0])
+            return jsonify(ok=True, platform="Facebook & Instagram", campaign=campaign_by_id(cid)["name"])
+    except Exception as e:  # noqa: BLE001
+        return jsonify(error=str(e)[:300]), 400
+    return jsonify(error="That isn't a sign-in address from Clip Engine. Copy the whole address from the page the sign-in ended on."), 400
 
 
 @APP.post("/api/youtube/disconnect")
@@ -1293,10 +1329,6 @@ def meta_connect():
         url = META.login_url(campaign_by_id(cid)["id"], RUN_PORT)
     except META.MetaError as e:
         return jsonify(error=str(e)), 400
-    try:
-        webbrowser.open(url)
-    except Exception:  # noqa: BLE001
-        pass
     return jsonify(ok=True, url=url)
 
 
