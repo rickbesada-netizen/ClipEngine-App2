@@ -992,7 +992,7 @@ function showSignin(boxSel, url, who, platform){
 async function loadYT(){
   try { YTS = await api('/api/youtube' + (campaign ? '?campaign=' + encodeURIComponent(campaign.id) : '')); } catch (e) { return; }
   const st = $('#yt-state'); st.innerHTML = '';
-  if (YTS.main_channel) st.append(el('p', 'ok-line', 'Default channel: ' + YTS.main_channel + '. Campaigns without their own account upload here.'));
+  if (YTS.main_channel) st.append(el('p', 'ok-line', 'Default channel: ' + YTS.main_channel + (YTS.email ? ' (account: ' + YTS.email + ')' : '') + '. Campaigns without their own account upload here.'));
   else if (!YTS.has_secret) st.append(el('p', 'hint', 'Not set up yet. Follow the one-time setup below.'));
   else st.append(el('p', 'hint', 'Ready. Connect each campaign to its own Google account below (a default channel is optional).'));
   if (YTS.connecting) st.append(el('p', 'hint', 'Waiting for the sign-in (use the link below): sign in with the right Google account (\u201cUse another account\u201d for a different client), allow access, and pick the channel if it asks.'));
@@ -1005,7 +1005,8 @@ async function loadYT(){
     const tbl = el('div', 'ytc');
     (YTS.campaigns || []).forEach(c => {
       const row = el('div', 'row ytc-row');
-      row.append(el('b', '', c.name), el('span', c.own ? 'ok-line' : 'hint', c.own ? 'uploads to ' + c.channel : (c.channel ? 'not connected yet, so it uses the default channel (' + c.channel + ')' : 'not connected yet')));
+      const acct = c.own ? (c.email ? ' — account: ' + c.email : ' — account: reconnect to show its email') : '';
+      row.append(el('b', '', c.name), el('span', c.own ? 'ok-line' : 'hint', c.own ? ('uploads to ' + c.channel + acct) : (c.channel ? 'not connected yet, so it uses the default channel (' + c.channel + ')' : 'not connected yet')));
       const go = el('button', c.own ? 'btn' : 'go', c.own ? 'Change account' : 'Connect its Google account'); if (!c.own) go.style.fontSize = '15px'; go.type = 'button';
       go.onclick = () => startSignin('#yt-signin', '/api/youtube/connect', { campaign: c.id, own: true }, c.name, 'YouTube (Google)', loadYT);
       row.append(go);

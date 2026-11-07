@@ -11,7 +11,8 @@ from pathlib import Path
 import pipeline as P
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.readonly",
-          "https://www.googleapis.com/auth/youtube"]  # last one lets the app update channel branding
+          "https://www.googleapis.com/auth/youtube",  # lets the app update channel branding
+          "openid", "https://www.googleapis.com/auth/userinfo.email"]  # so we can show which Google account is connected
 SECRET = P.DATA / "youtube_client_secret.json"
 TOKEN = P.DATA / "youtube_token.json"            # the main channel, used by every campaign without its own
 TOKEN_DIR = P.DATA / "youtube_channels"          # <campaign id>.json: a campaign's own channel
@@ -54,11 +55,28 @@ def _names() -> dict:
         return {}
 
 
-def _remember_name(key, name, cid):
+def _remember_name(key, name, cid, email=None):
     TOKEN_DIR.mkdir(parents=True, exist_ok=True)
     n = _names()
-    n[_key(key)] = {"name": name, "id": cid}
+    old = n.get(_key(key)) or {}
+    entry = {"name": name, "id": cid}
+    # Keep a previously-stored email if this update didn't bring a new one.
+    entry["email"] = email or old.get("email")
+    n[_key(key)] = entry
     NAMES.write_text(json.dumps(n), encoding="utf-8")
+
+
+def _fetch_email(creds) -> str | None:
+    """The signed-in Google account's email (needs the userinfo.email scope)."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            headers={"Authorization": f"Bearer {creds.token}"})
+        with urllib.request.urlopen(req, timeout=10) as r:  # noqa: S310
+            return (json.loads(r.read().decode("utf-8")) or {}).get("email")
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _creds(key=None):
@@ -107,19 +125,21 @@ def status(campaign=None) -> dict:
             out["connected"] = False
     main = _names().get("__main__", {})
     out["main_channel"] = main.get("name") if TOKEN.exists() else None
+    out["email"] = (_names().get(_key(key)) or {}).get("email")
     return out
 
 
 def overview(campaign_ids: list[str]) -> dict:
     """Which channel each campaign uploads to, from remembered names (no API calls)."""
     names = _names()
-    main = names.get("__main__", {}).get("name") if TOKEN.exists() else None
+    main = names.get("__main__", {}) if TOKEN.exists() else {}
     out = {}
     for cid in campaign_ids:
         if has_own(cid):
-            out[cid] = {"own": True, "channel": (names.get(cid) or {}).get("name") or "its own channel"}
+            info = names.get(cid) or {}
+            out[cid] = {"own": True, "channel": info.get("name") or "its own channel", "email": info.get("email")}
         else:
-            out[cid] = {"own": False, "channel": main}
+            out[cid] = {"own": False, "channel": main.get("name"), "email": main.get("email")}
     return out
 
 
@@ -178,6 +198,20 @@ def finish(code: str, state: str):
         tp.parent.mkdir(parents=True, exist_ok=True)
         tp.write_text(creds.to_json(), encoding="utf-8")
         stt.update(error=None, channel=None, channel_id=None)
+        # Remember which Google account this is + its channel, so the list can
+        # show it without any further API calls.
+        email = _fetch_email(creds)
+        name, cid = None, None
+        try:
+            from googleapiclient.discovery import build
+            svc = build("youtube", "v3", credentials=creds, cache_discovery=False)
+            items = (svc.channels().list(part="snippet", mine=True).execute() or {}).get("items") or []
+            name = items[0]["snippet"]["title"] if items else "(no channel on this Google account)"
+            cid = items[0]["id"] if items else None
+        except Exception:  # noqa: BLE001
+            pass
+        _remember_name(key, name, cid, email)
+        stt["channel"], stt["channel_id"] = name, cid
     except Exception as e:  # noqa: BLE001
         stt["error"] = f"Connecting failed: {str(e)[:200]}"
         raise RuntimeError(stt["error"]) from e
