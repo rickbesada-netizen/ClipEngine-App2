@@ -83,6 +83,10 @@ h2{font-family:var(--display);font-weight:700;font-size:21px;text-transform:uppe
 .fd .desc{font-size:13px;color:var(--muted);white-space:pre-wrap;max-height:4.2em;overflow:hidden;word-break:break-word}
 .fd .row{flex-wrap:wrap}
 .brand-box{display:flex;flex-direction:column;gap:8px}.brand-box .row{gap:8px;align-items:center;flex-wrap:wrap}.brand-prev{max-width:100%;max-height:90px;object-fit:contain;align-self:flex-start;border:1px solid var(--line);border-radius:4px;background:#222}
+.vm-list{display:flex;flex-direction:column;gap:4px;max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:6px}
+.vm-row{display:flex;align-items:center;gap:10px;padding:4px;border-radius:4px;cursor:pointer}.vm-row:hover{background:var(--line)}
+.vm-row img{width:64px;height:48px;object-fit:cover;border-radius:3px;flex:none;background:var(--line)}.vm-txt{display:flex;flex-direction:column;flex:1;min-width:0}.vm-t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn.danger{border-color:#b42318;color:#b42318}.btn.danger:not(:disabled):hover{background:#b42318;color:#fff}
 .signin-box{border:2px solid var(--accent);border-radius:6px;padding:12px;margin:10px 0;display:flex;flex-direction:column;gap:8px}.signin-box .row{gap:8px;flex-wrap:nowrap}
 .ytc{display:flex;flex-direction:column;gap:6px}.ytc-row{gap:10px;align-items:center;flex-wrap:wrap}.ytc-row b{min-width:120px}
 .elsewhere{width:190px;max-width:100%;aspect-ratio:9/16;border:1px dashed var(--line);border-radius:6px;display:flex;align-items:center;justify-content:center;text-align:center;padding:12px;font-size:13px;color:var(--muted);box-sizing:border-box}
@@ -405,6 +409,7 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
           <label class="lbl" for="s-ytpriv" style="margin-left:8px">Upload as</label><select id="s-ytpriv"><option value="public">Public</option><option value="unlisted">Unlisted</option><option value="private">Private</option></select></div>
         <div id="yt-camps"></div>
         <div id="yt-signin"></div>
+        <div id="yt-manage"></div>
         <details id="yt-setup"><summary>One-time setup (about 10 minutes, free)</summary>
           <ol class="steps" style="margin-top:10px">
             <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud</a> signed in with the Google account that owns your clip channel, and create a project called <b>Clip Engine</b>.</li>
@@ -991,6 +996,61 @@ function showSignin(boxSel, url, who, platform){
   r2.append(back, fin); box.append(r2);
   box.append(el('p', 'hint', 'The link only works with this Clip Engine and expires after an hour. Press Connect again for a new one.'));
 }
+
+/* managing (deleting) a channel's videos */
+let VM = null;
+async function openVideoManager(cid, name){
+  const box = $('#yt-manage'); box.className = 'signin-box'; box.innerHTML = '';
+  box.append(el('b', '', 'Videos on ' + name + '\u2019s channel'), el('p', 'hint', 'Loading the channel\u2019s videos...'));
+  box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  let r; try { r = await api('/api/youtube/videos?campaign=' + encodeURIComponent(cid), null, 'GET', 120000); } catch (e) { box.innerHTML = ''; box.className = ''; toast(e.message); return; }
+  VM = { cid, name, channel: r.channel, videos: r.videos, sel: new Set(), filter: 'all' };
+  renderVideoManager(r.job);
+}
+function renderVideoManager(job){
+  const box = $('#yt-manage'); box.innerHTML = ''; box.className = 'signin-box';
+  const top = el('div', 'row'); top.append(el('b', '', VM.channel + ': ' + VM.videos.length + ' video' + (VM.videos.length === 1 ? '' : 's')));
+  const close = el('button', 'btn', 'Close'); close.type = 'button'; close.onclick = () => { box.innerHTML = ''; box.className = ''; VM = null; }; top.append(close);
+  box.append(top);
+  if (job && (job.state === 'running' || job.error || job.state === 'done')){
+    const msg = job.state === 'running' ? 'Deleting... ' + job.done + ' of ' + job.total + ' done.' : 'Finished: ' + job.done + ' deleted' + (job.failed ? ', ' + job.failed + ' failed' : '') + '.';
+    box.append(el('p', job.error ? 'bad-line' : 'ok-line', msg + (job.error ? ' ' + job.error : '')));
+    if (job.state === 'running'){
+      const st = el('button', 'btn', 'Stop'); st.type = 'button'; st.onclick = () => api('/api/youtube/delete', { campaign: VM.cid, stop: true }); box.append(st);
+      setTimeout(async () => { if (!VM) return; const j = await api('/api/youtube/delete?campaign=' + encodeURIComponent(VM.cid)); if (j.job && j.job.state !== 'running') openVideoManager(VM.cid, VM.name); else renderVideoManager(j.job); }, 2000);
+      return;
+    }
+  }
+  if (!VM.videos.length){ box.append(el('p', 'hint', 'This channel has no videos.')); return; }
+  const f = el('div', 'row');
+  [['all', 'All videos'], ['ce', 'Only ones Clip Engine uploaded']].forEach(([v, t]) => { const b = el('button', VM.filter === v ? 'go' : 'btn', t); b.type = 'button'; b.style.fontSize = '14px'; b.onclick = () => { VM.filter = v; renderVideoManager(); }; f.append(b); });
+  const shown = VM.videos.filter(v => VM.filter === 'all' || v.clip_engine);
+  const all = el('button', 'btn', 'Tick all ' + shown.length); all.type = 'button'; all.onclick = () => { shown.forEach(v => VM.sel.add(v.id)); renderVideoManager(); };
+  const none = el('button', 'btn', 'Untick all'); none.type = 'button'; none.onclick = () => { VM.sel.clear(); renderVideoManager(); };
+  f.append(all, none); box.append(f);
+  const list = el('div', 'vm-list');
+  shown.forEach(v => {
+    const row = el('label', 'vm-row');
+    const cb = el('input'); cb.type = 'checkbox'; cb.checked = VM.sel.has(v.id); cb.onchange = () => { cb.checked ? VM.sel.add(v.id) : VM.sel.delete(v.id); renderVideoManager(); };
+    const im = el('img'); im.alt = ''; im.loading = 'lazy'; im.onerror = () => { im.style.visibility = 'hidden'; }; if (v.thumb) im.src = v.thumb; else im.style.visibility = 'hidden';
+    const t = el('span', 'vm-t', v.title || '(no title)');
+    const meta = el('span', 'hint', (v.published || '').slice(0, 10) + ' \u00b7 ' + v.privacy + (v.clip_engine ? ' \u00b7 from Clip Engine' : ''));
+    const a = el('a', 'btn', 'View'); a.href = 'https://www.youtube.com/watch?v=' + v.id; a.target = '_blank'; a.rel = 'noopener';
+    const txt = el('span', 'vm-txt'); txt.append(t, meta);
+    row.append(cb, im, txt, a); list.append(row);
+  });
+  box.append(list);
+  if (VM.sel.size){
+    const n = VM.sel.size;
+    box.append(el('p', 'bad-line', 'Deleting removes ' + n + ' video' + (n === 1 ? '' : 's') + ' from YouTube for good, with their views and comments. This can\u2019t be undone. YouTube allows about 190 deletions a day per Google project; past that, the rest wait until tomorrow.'));
+    const cr = el('div', 'row');
+    const ci = el('input'); ci.placeholder = 'Type the channel name: ' + VM.channel; ci.style.flex = '1'; ci.style.minWidth = '0';
+    const del = el('button', 'btn danger', 'Delete ' + n + ' video' + (n === 1 ? '' : 's')); del.type = 'button'; del.disabled = true;
+    ci.oninput = () => { del.disabled = ci.value.trim() !== VM.channel.trim(); };
+    del.onclick = () => api('/api/youtube/delete', { campaign: VM.cid, ids: [...VM.sel], confirm: ci.value }).then(x => { VM.sel.clear(); renderVideoManager(x.job); }).catch(e => toast(e.message));
+    cr.append(ci, del); box.append(cr);
+  }
+}
 async function loadYT(){
   try { YTS = await api('/api/youtube' + (campaign ? '?campaign=' + encodeURIComponent(campaign.id) : '')); } catch (e) { return; }
   const st = $('#yt-state'); st.innerHTML = '';
@@ -1013,6 +1073,7 @@ async function loadYT(){
       go.onclick = () => startSignin('#yt-signin', '/api/youtube/connect', { campaign: c.id, own: true }, c.name, 'YouTube (Google)', loadYT);
       row.append(go);
       if (c.own){ const off = el('button', 'btn', 'Disconnect'); off.type = 'button'; off.onclick = () => api('/api/youtube/disconnect', { campaign: c.id, own: true }).then(loadYT); row.append(off); }
+      if (c.own && c.channel && !/^\(no channel/.test(c.channel)){ const mv = el('button', 'btn', 'Manage videos'); mv.type = 'button'; mv.onclick = () => openVideoManager(c.id, c.name); row.append(mv); }
       tbl.append(row);
     });
     box.append(tbl);

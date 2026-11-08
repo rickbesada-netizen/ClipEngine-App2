@@ -1312,6 +1312,87 @@ def yt_upload(cid):
     return jsonify(ok=True)
 
 
+# ---------------------------------------------------------------- deleting videos from a campaign's YouTube channel
+YT_DELETES: dict = {}  # campaign key -> {state, total, done, failed, error, channel}
+
+
+@APP.get("/api/youtube/videos")
+def yt_videos():
+    cid = request.args.get("campaign") or None
+    try:
+        r = YT.list_videos(cid)
+    except Exception as e:  # noqa: BLE001
+        return jsonify(error=str(e)[:300]), 400
+    mine = {(c.get("yt_upload") or {}).get("id") for c in DB["clips"]} - {None}
+    for v in r["videos"]:
+        v["clip_engine"] = v["id"] in mine
+    return jsonify(**r, job=YT_DELETES.get(cid or "__main__"))
+
+
+@APP.get("/api/youtube/delete")
+def yt_delete_status():
+    return jsonify(job=YT_DELETES.get(request.args.get("campaign") or "__main__"))
+
+
+@APP.post("/api/youtube/delete")
+def yt_delete():
+    """Permanently deletes the chosen videos. The request must repeat the channel's exact name, typed by the user."""
+    b = request.get_json(force=True) or {}
+    cid = b.get("campaign") or None
+    key = cid or "__main__"
+    if b.get("stop"):
+        if key in YT_DELETES:
+            YT_DELETES[key]["stop"] = True
+        return jsonify(ok=True)
+    ids = [i for i in (b.get("ids") or []) if isinstance(i, str) and re.fullmatch(r"[\w-]{6,20}", i)]
+    if not ids:
+        return jsonify(error="Tick the videos to delete first."), 400
+    if (YT_DELETES.get(key) or {}).get("state") == "running":
+        return jsonify(error="Already deleting on this channel."), 400
+    try:
+        channel = YT.list_videos(cid, limit=1)["channel"]
+    except Exception as e:  # noqa: BLE001
+        return jsonify(error=str(e)[:300]), 400
+    if (b.get("confirm") or "").strip() != channel.strip():
+        return jsonify(error=f"Type the channel name exactly ({channel}) to confirm."), 400
+    job = {"state": "running", "total": len(ids), "done": 0, "failed": 0, "error": "", "channel": channel, "stop": False}
+    YT_DELETES[key] = job
+
+    def run():
+        gone = set()
+        for vid in ids:
+            if job["stop"]:
+                job["error"] = f"Stopped. {len(ids) - job['done'] - job['failed']} not deleted."
+                break
+            try:
+                YT.delete_video(cid, vid)
+                job["done"] += 1
+                gone.add(vid)
+            except Exception as e:  # noqa: BLE001
+                msg = str(e)
+                if "quotaExceeded" in msg or "dailyLimitExceeded" in msg:
+                    job["error"] = (f"YouTube's daily limit reached after {job['done']} deletions. The rest "
+                                    f"({len(ids) - job['done'] - job['failed']}) can be deleted tomorrow: open the list again then.")
+                    break
+                if "videoNotFound" in msg or "404" in msg:
+                    job["done"] += 1
+                    gone.add(vid)
+                    continue
+                job["failed"] += 1
+                job["error"] = f"Some couldn't be deleted: {msg[:160]}"
+            time.sleep(0.2)
+        with LOCK:
+            for c in DB["clips"]:
+                yu = c.get("yt_upload") or {}
+                if yu.get("id") in gone:
+                    c["yt_upload"] = {"state": "deleted", "id": yu.get("id")}
+        save_db()
+        job["state"] = "done"
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(ok=True, job=job)
+
+
 # ---------------------------------------------------------------- Instagram and Facebook (per campaign)
 @APP.get("/api/meta")
 def meta_status():

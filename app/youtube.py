@@ -331,3 +331,36 @@ def apply_branding(banner: Path | None, description: str | None, keywords: str |
         done.append("banner")
     yt.channels().update(part="brandingSettings", body=body).execute()
     return {"updated": done, "channel_id": ch["id"]}
+
+
+# ---------------------------------------------------------------- managing a channel's videos
+def list_videos(campaign=None, limit: int = 5000) -> dict:
+    """Every video on the campaign's channel (newest first), from its uploads playlist."""
+    key = resolve(campaign)
+    yt = _service(key)
+    ch = yt.channels().list(part="contentDetails,snippet", mine=True).execute().get("items") or []
+    if not ch:
+        raise RuntimeError("This Google account has no YouTube channel.")
+    uploads = ch[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+    out, tok = [], None
+    while len(out) < limit:
+        r = yt.playlistItems().list(part="snippet,contentDetails,status", playlistId=uploads, maxResults=50,
+                                    pageToken=tok).execute()
+        for it in r.get("items", []):
+            sn = it.get("snippet", {})
+            vid = it.get("contentDetails", {}).get("videoId") or sn.get("resourceId", {}).get("videoId")
+            if not vid:
+                continue
+            th = sn.get("thumbnails", {})
+            out.append({"id": vid, "title": sn.get("title", ""), "published": it.get("contentDetails", {}).get("videoPublishedAt") or sn.get("publishedAt", ""),
+                        "privacy": it.get("status", {}).get("privacyStatus", ""),
+                        "thumb": (th.get("default") or th.get("medium") or {}).get("url", "")})
+        tok = r.get("nextPageToken")
+        if not tok:
+            break
+    return {"channel": ch[0]["snippet"]["title"], "channel_id": ch[0]["id"], "videos": out}
+
+
+def delete_video(campaign, video_id: str):
+    _service(resolve(campaign)).videos().delete(id=video_id).execute()
+
