@@ -1169,6 +1169,32 @@ def accounts_check():
     return jsonify(res)
 
 
+@APP.get("/api/links")
+def links_get():
+    """Per campaign: the TikTok and X accounts (handles) saved by hand. Synced like the rest of Accounts."""
+    accs = DB.get("accounts", {})
+    return jsonify({c["id"]: (accs.get(c["id"]) or {}).get("links", {}) for c in campaigns()})
+
+
+@APP.post("/api/links")
+def links_set():
+    b = request.get_json(force=True) or {}
+    plat = b.get("platform")
+    if plat not in ("tiktok", "x", "instagram", "facebook", "youtube"):
+        return jsonify(error="Unknown platform"), 400
+    h = re.sub(r"^https?://(www\.)?(tiktok\.com/|x\.com/|twitter\.com/|instagram\.com/|facebook\.com/|youtube\.com/)", "", (b.get("handle") or "").strip())
+    h = re.sub(r"[/?#].*$", "", h).lstrip("@")[:60]
+    with LOCK:
+        acc = DB.setdefault("accounts", {}).setdefault(campaign_by_id(b.get("campaign"))["id"], {})
+        links = acc.setdefault("links", {})
+        if h:
+            links[plat] = h
+        else:
+            links.pop(plat, None)
+    save_db()
+    return jsonify(ok=True, handle=h)
+
+
 @APP.post("/api/accounts/save")
 def accounts_save():
     body = request.get_json(force=True)

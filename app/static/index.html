@@ -83,6 +83,21 @@ h2{font-family:var(--display);font-weight:700;font-size:21px;text-transform:uppe
 .fd .desc{font-size:13px;color:var(--muted);white-space:pre-wrap;max-height:4.2em;overflow:hidden;word-break:break-word}
 .fd .row{flex-wrap:wrap}
 .brand-box{display:flex;flex-direction:column;gap:8px}.brand-box .row{gap:8px;align-items:center;flex-wrap:wrap}.brand-prev{max-width:100%;max-height:90px;object-fit:contain;align-self:flex-start;border:1px solid var(--line);border-radius:4px;background:#222}
+.plat-grid{display:flex;flex-direction:column;gap:10px}
+.plat-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--line)}
+.plat-name{min-width:130px}
+.plat-icons{display:flex;gap:14px;flex-wrap:wrap}
+.plat-cell{display:flex;flex-direction:column;align-items:center;gap:3px;width:78px}
+.plat-cap{font-size:11px;color:var(--muted);max-width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.plat-ic{width:44px;height:44px;border-radius:50%;border:1px solid var(--line);background:var(--surface);display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9aa1ab;padding:0;opacity:.7}
+.plat-ic svg{width:22px;height:22px;fill:currentColor}
+.plat-ic:hover{opacity:1;border-color:var(--ink)}
+.plat-ic.on{opacity:1;color:#fff;border-color:transparent}
+.plat-ic.on.tiktok{background:#111}.plat-ic.on.instagram{background:#d62976}.plat-ic.on.youtube{background:#e00}.plat-ic.on.x{background:#000}.plat-ic.on.facebook{background:#1877f2}
+.plat-ic.on.youtube svg path,.plat-ic.on.facebook svg path:last-child{fill:#fff}
+.plat-ic.on.youtube svg rect{fill:#fff}.plat-ic.on.youtube svg path{fill:#e00}
+.plat-ic.on.facebook svg circle{fill:#fff}.plat-ic.on.facebook svg path{fill:#1877f2}
+.plat-ic.warn{border:2px solid #d4a017;opacity:1}
 .vm-list{display:flex;flex-direction:column;gap:4px;max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:6px}
 .vm-row{display:flex;align-items:center;gap:10px;padding:4px;border-radius:4px;cursor:pointer}.vm-row:hover{background:var(--line)}
 .vm-row img{width:64px;height:48px;object-fit:cover;border-radius:3px;flex:none;background:var(--line)}.vm-txt{display:flex;flex-direction:column;flex:1;min-width:0}.vm-t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -382,6 +397,12 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
           <div class="row"><button class="btn" id="sync-go" type="button">Sync now</button><button class="btn" id="sync-out-btn" type="button">Sign out</button></div>
         </div>
       </div>
+      <div class="panel" style="grid-column:1/-1" id="plat-panel">
+        <h2>Accounts per campaign</h2>
+        <p class="hint">Each campaign has its own account on every platform. Coloured = connected, grey = not yet. Click an icon to connect it or see its account.</p>
+        <div id="plat-grid" class="plat-grid"></div>
+        <div id="plat-detail"></div>
+      </div>
       <div class="panel" style="grid-column:1/-1" id="meta-panel">
         <h2>Post to Instagram and Facebook from Clip Engine</h2>
         <p class="hint">Each campaign posts Reels to its own client's Instagram account and Facebook Page. Uses your own free Meta developer app (one-time setup below), and videos upload straight from this laptop.</p>
@@ -455,7 +476,7 @@ let skew = 0;
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-selected', x === b));
   ['make', 'clips', 'accounts', 'rules', 'discover', 'settings'].forEach(t => $('#tab-' + t).hidden = t !== b.dataset.tab);
-  if (b.dataset.tab === 'settings') { loadOllama(); loadYT(); loadClipsFolder(); loadMeta(); }
+  if (b.dataset.tab === 'settings') { loadOllama(); loadClipsFolder(); Promise.all([loadYT(), loadMeta()]).then(loadPlatforms); }
   if (b.dataset.tab === 'discover') { loadFinder(true); }
   if (b.dataset.tab === 'rules') { loadBranding(); }
   if (b.dataset.tab === 'accounts') loadAccounts();
@@ -1238,6 +1259,82 @@ async function loadMeta(){
 }
 $('#meta-save').onclick = () => api('/api/meta/app', { app_id: $('#meta-id').value, app_secret: $('#meta-secret').value }).then(() => { $('#meta-secret').value = ''; toast('Saved. Now connect each campaign.'); loadMeta(); }).catch(e => toast(e.message));
 loadMeta();
+
+/* platform icons per campaign */
+const PICON = {
+  tiktok: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.6 3c.4 2.2 1.9 3.8 4.1 4v3.2c-1.5 0-2.9-.4-4.1-1.2v6.3a5.8 5.8 0 1 1-5.8-5.8c.3 0 .7 0 1 .1v3.3a2.6 2.6 0 1 0 1.6 2.4V3h3.2z"/></svg>',
+  instagram: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="17.3" cy="6.7" r="1.3"/></svg>',
+  youtube: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="4"/><path d="M10 9l5 3-5 3z" fill="var(--surface,#fff)"/></svg>',
+  x: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h4.6l4.1 5.6L17.6 3h2.6l-6.3 7.3L21 21h-4.6l-4.5-6.1L6.4 21H3.8l6.9-8L4 3z"/></svg>',
+  facebook: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M13.2 21v-7h2.4l.4-2.8h-2.8V9.5c0-.8.3-1.4 1.4-1.4H16V5.6c-.3 0-1.1-.1-2.1-.1-2.1 0-3.5 1.3-3.5 3.6v2.1H8v2.8h2.4v7" fill="var(--surface,#fff)"/></svg>'
+};
+const PNAME = { tiktok: 'TikTok', instagram: 'Instagram', youtube: 'YouTube', x: 'X', facebook: 'Facebook' };
+const PORDER = ['tiktok', 'instagram', 'youtube', 'x', 'facebook'];
+let PL_LINKS = {};
+function platState(cid, p){
+  const links = PL_LINKS[cid] || {};
+  if (p === 'youtube'){ const y = ((YTS && YTS.campaigns) || []).find(c => c.id === cid); if (y && y.own && y.channel && !/^\(no channel/.test(y.channel)) return { on: true, label: y.channel }; if (y && y.own) return { on: false, warn: true, label: 'no channel yet' }; return { on: false, label: links.youtube ? '@' + links.youtube : '' }; }
+  if (p === 'instagram'){ const m = MS && MS[cid]; if (m && m.connected && m.instagram) return { on: true, label: '@' + m.instagram }; return { on: false, label: links.instagram ? '@' + links.instagram : '' }; }
+  if (p === 'facebook'){ const m = MS && MS[cid]; if (m && m.connected) return { on: true, label: m.page }; return { on: false, label: links.facebook || '' }; }
+  return { on: !!links[p], label: links[p] ? '@' + links[p] : '' };
+}
+async function loadPlatforms(){
+  try { PL_LINKS = await api('/api/links'); } catch (e) { return; }
+  if (!YTS || !YTS.campaigns) await loadYT();
+  if (!MS) await loadMeta();
+  const g = $('#plat-grid'); g.innerHTML = '';
+  (S.campaigns || []).forEach(c => {
+    const row = el('div', 'plat-row'); row.append(el('b', 'plat-name', c.name));
+    const icons = el('div', 'plat-icons');
+    PORDER.forEach(p => {
+      const st = platState(c.id, p);
+      const b = el('button', 'plat-ic ' + p + (st.on ? ' on' : '') + (st.warn ? ' warn' : '')); b.type = 'button';
+      b.title = PNAME[p] + ': ' + (st.on ? 'connected' + (st.label ? ' (' + st.label + ')' : '') : st.warn ? st.label : 'not connected');
+      b.setAttribute('aria-label', b.title); b.innerHTML = PICON[p];
+      const cap = el('span', 'plat-cap', st.label || ''); const wrap = el('div', 'plat-cell'); wrap.append(b, cap);
+      b.onclick = () => platDetail(c, p);
+      icons.append(wrap);
+    });
+    row.append(icons); g.append(row);
+  });
+}
+function platDetail(c, p){
+  const box = $('#plat-detail'); box.innerHTML = ''; box.className = 'signin-box';
+  const st = platState(c.id, p);
+  const top = el('div', 'row'); top.append(el('b', '', PNAME[p] + ' for ' + c.name));
+  const x = el('button', 'btn', 'Close'); x.type = 'button'; x.onclick = () => { box.innerHTML = ''; box.className = ''; }; top.append(x); box.append(top);
+  const handleEditor = (note, uploadUrl) => {
+    box.append(el('p', 'hint', note));
+    const r = el('div', 'row'); const inp = el('input', 'mono'); inp.placeholder = '@handle or profile link'; inp.value = (PL_LINKS[c.id] || {})[p] || ''; inp.style.flex = '1'; inp.style.minWidth = '0';
+    const sv = el('button', 'go', 'Save'); sv.type = 'button'; sv.style.fontSize = '15px';
+    sv.onclick = () => api('/api/links', { campaign: c.id, platform: p, handle: inp.value }).then(() => { toast('Saved'); loadPlatforms().then(() => platDetail(c, p)); }).catch(e => toast(e.message));
+    r.append(inp, sv); box.append(r);
+    const h = (PL_LINKS[c.id] || {})[p];
+    const r2 = el('div', 'row');
+    if (h){ const pr = el('a', 'btn', 'Open @' + h); pr.target = '_blank'; pr.rel = 'noopener'; pr.href = p === 'tiktok' ? 'https://www.tiktok.com/@' + h : p === 'x' ? 'https://x.com/' + h : p === 'instagram' ? 'https://www.instagram.com/' + h + '/' : p === 'youtube' ? 'https://www.youtube.com/@' + h : 'https://www.facebook.com/' + h; r2.append(pr); }
+    if (uploadUrl){ const up = el('a', 'btn', 'Open the upload page'); up.href = uploadUrl; up.target = '_blank'; up.rel = 'noopener'; r2.append(up); }
+    box.append(r2);
+  };
+  if (p === 'youtube'){
+    if (st.on){ box.append(el('p', 'ok-line', 'Connected: clips upload to ' + st.label + '.')); const m = el('button', 'btn', 'Manage videos'); m.type = 'button'; m.onclick = () => openVideoManager(c.id, c.name); box.append(m); }
+    else if (st.warn) box.append(el('p', 'bad-line', 'Signed in, but that Google account has no YouTube channel yet. On youtube.com: profile picture > Create a channel.'));
+    const go = el('button', st.on ? 'btn' : 'go', st.on ? 'Change account' : 'Connect its Google account'); go.type = 'button';
+    go.onclick = () => startSignin('#plat-detail-signin', '/api/youtube/connect', { campaign: c.id, own: true }, c.name, 'YouTube (Google)', () => { loadYT().then(loadPlatforms); });
+    box.append(go, Object.assign(el('div'), { id: 'plat-detail-signin' }));
+  } else if (p === 'instagram' || p === 'facebook'){
+    if (!MS || !Object.keys(MS).length || ($('#meta-camps').textContent || '').includes('Not set up')){ box.append(el('p', 'hint', 'First do the one-time Meta setup in "Post to Instagram and Facebook" below.')); }
+    if (st.on) box.append(el('p', 'ok-line', 'Connected: ' + (p === 'instagram' ? 'Reels post to ' + st.label : 'Reels post to the Page ' + st.label) + '.'));
+    else if (p === 'instagram' && MS && MS[c.id] && MS[c.id].connected) box.append(el('p', 'bad-line', 'The Facebook Page is connected, but no Instagram account is linked to it. In Instagram: switch to a Professional account and link it to the Page, then press Change account.'));
+    const go = el('button', st.on ? 'btn' : 'go', st.on ? 'Change account' : 'Connect Facebook & Instagram'); go.type = 'button';
+    go.onclick = () => startSignin('#plat-detail-signin', '/api/meta/connect', { campaign: c.id }, c.name, 'Facebook & Instagram', () => { loadMeta().then(loadPlatforms); });
+    box.append(go, Object.assign(el('div'), { id: 'plat-detail-signin' }));
+  } else if (p === 'tiktok'){
+    handleEditor('TikTok doesn’t let apps post publicly without its review, so you post with the TikTok upload page (signed in as this account). Save the account here so it’s on record for this campaign and on every laptop.', 'https://www.tiktok.com/tiktokstudio/upload');
+  } else {
+    handleEditor('X charges per post through its API, so post with the X compose page (signed in as this account). Save the account here so it’s on record for this campaign.', 'https://x.com/compose/post');
+  }
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
 /* campaign finder */
 let FD = null;
 const PL = { youtube: 'YouTube', tiktok: 'TikTok', instagram: 'Instagram', x: 'X' };
