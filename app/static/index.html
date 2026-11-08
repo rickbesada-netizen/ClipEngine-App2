@@ -1042,13 +1042,14 @@ function renderVideoManager(job){
   box.append(list);
   if (VM.sel.size){
     const n = VM.sel.size;
-    box.append(el('p', 'bad-line', 'Deleting removes ' + n + ' video' + (n === 1 ? '' : 's') + ' from YouTube for good, with their views and comments. This can\u2019t be undone. YouTube allows about 190 deletions a day per Google project; past that, the rest wait until tomorrow.'));
+    box.append(el('p', 'bad-line', 'Deletes ' + n + ' video' + (n === 1 ? '' : 's') + ' from YouTube for good (views and comments too). YouTube allows about 190 deletions a day through Clip Engine; for more, use YouTube Studio\u2019s bulk delete (Content, tick the top box, Select all, More actions, Delete forever).'));
     const cr = el('div', 'row');
-    const ci = el('input'); ci.placeholder = 'Type the channel name: ' + VM.channel; ci.style.flex = '1'; ci.style.minWidth = '0';
-    const del = el('button', 'btn danger', 'Delete ' + n + ' video' + (n === 1 ? '' : 's')); del.type = 'button'; del.disabled = true;
-    ci.oninput = () => { del.disabled = ci.value.trim() !== VM.channel.trim(); };
-    del.onclick = () => api('/api/youtube/delete', { campaign: VM.cid, ids: [...VM.sel], confirm: ci.value }).then(x => { VM.sel.clear(); renderVideoManager(x.job); }).catch(e => toast(e.message));
-    cr.append(ci, del); box.append(cr);
+    const del = el('button', 'btn danger', 'Delete ' + n + ' video' + (n === 1 ? '' : 's')); del.type = 'button';
+    del.onclick = () => {
+      if (!del.dataset.sure){ del.dataset.sure = 1; del.textContent = 'Click again to delete ' + n + ' for good'; setTimeout(() => { if (del.isConnected){ delete del.dataset.sure; del.textContent = 'Delete ' + n + ' video' + (n === 1 ? '' : 's'); } }, 6000); return; }
+      api('/api/youtube/delete', { campaign: VM.cid, ids: [...VM.sel], confirm: VM.channel }).then(x => { VM.sel.clear(); renderVideoManager(x.job); }).catch(e => toast(e.message));
+    };
+    cr.append(del); box.append(cr);
   }
 }
 async function loadYT(){
