@@ -12,3 +12,4 @@ pillow>=10.0
 rapidocr_onnxruntime
 pystray>=0.19
 gdown>=5.2
+openpyxl>=3.1

@@ -57,7 +57,7 @@ DEFAULT_SETTINGS = {
     "clips_per_video": 4, "min_len": 20, "max_len": 45, "layout": "auto", "captions": True,
     "hook_overlay": True, "whisper_model": "base", "max_height": 1080, "cookies_browser": "none",
     "cookies_file": "", "use_ollama": False, "youtube_privacy": "public", "ollama_model": "", "caption_style": {"upper": True, "size": 96},
-    "clean_language": True, "mute_swears": True, "avoid_swearing": True, "clips_folder": "", "finder_platforms": [], "finder_min_rate": 0, "finder_min_budget": 300, "finder_hide_apply": False, "finder_pool": True,
+    "clean_language": True, "mute_swears": True, "avoid_swearing": True, "clips_folder": "", "trickster_port": 53200, "trickster_token": "", "finder_platforms": [], "finder_min_rate": 0, "finder_min_budget": 300, "finder_hide_apply": False, "finder_pool": True,
 }
 
 
@@ -1417,6 +1417,163 @@ def yt_delete():
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify(ok=True, job=job)
+
+
+# ---------------------------------------------------------------- Trickster: open a campaign's account in its client's profile
+TRICK_PLATFORMS = ("tiktok", "instagram", "youtube", "x", "facebook")
+
+
+def trickster_profile(cid: str, platform: str | None = None) -> str:
+    t = ((DB.get("accounts", {}).get(cid) or {}).get("trickster") or {})
+    return str((platform and t.get(platform)) or t.get("default") or "").strip()
+
+
+def trickster_call(action: str, body: dict, timeout: int = 90) -> dict:
+    import urllib.error
+    import urllib.request
+    st = DB["settings"]
+    port = int(st.get("trickster_port") or 53200)
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/v2/{action}", data=json.dumps(body).encode(), method="POST",
+                                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {st.get('trickster_token') or ''}"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            data = json.loads(e.read() or b"{}")
+        except Exception:  # noqa: BLE001
+            data = {}
+        if e.code in (401, 403):
+            raise RuntimeError("Trickster refused the token. In Trickster open the API panel, press Copy token, and paste it in "
+                               "Clip Engine (Settings > Accounts per campaign > Trickster).") from None
+        if not data:
+            raise RuntimeError(f"Trickster answered {e.code}.") from None
+    except (urllib.error.URLError, OSError):
+        raise RuntimeError(f"Trickster isn't answering on port {port}. Open Trickster on this laptop and turn on its API "
+                           "(API panel), then try again.") from None
+    err = (data.get("error") or {}) if isinstance(data, dict) else {}
+    if err.get("code") not in (0, None):
+        raise RuntimeError(f"Trickster: {err.get('message') or 'error'}")
+    return data.get("data") or {}
+
+
+@APP.get("/api/trickster")
+def trickster_get():
+    st = DB["settings"]
+    accs = DB.get("accounts", {})
+    return jsonify(port=int(st.get("trickster_port") or 53200), has_token=bool(st.get("trickster_token")),
+                   profiles={c["id"]: (accs.get(c["id"]) or {}).get("trickster", {}) for c in campaigns()})
+
+
+@APP.post("/api/trickster/settings")
+def trickster_settings():
+    b = request.get_json(force=True) or {}
+    with LOCK:
+        if "token" in b:
+            DB["settings"]["trickster_token"] = str(b["token"]).strip()
+        if b.get("port"):
+            DB["settings"]["trickster_port"] = int(b["port"])
+    save_db()
+    try:
+        info = trickster_call("ping", {}, timeout=8)
+        return jsonify(ok=True, message=f"Connected to Trickster ({info.get('profiles', '?')} profiles).")
+    except Exception as e:  # noqa: BLE001
+        return jsonify(ok=False, message=str(e))
+
+
+@APP.post("/api/trickster/link")
+def trickster_link():
+    b = request.get_json(force=True) or {}
+    plat = b.get("platform") or "default"
+    if plat not in TRICK_PLATFORMS + ("default",):
+        return jsonify(error="Unknown platform"), 400
+    prof = re.sub(r"[^\w .-]", "", str(b.get("profile") or "")).strip()[:60]
+    with LOCK:
+        t = DB.setdefault("accounts", {}).setdefault(campaign_by_id(b.get("campaign"))["id"], {}).setdefault("trickster", {})
+        if prof:
+            t[plat] = prof
+        else:
+            t.pop(plat, None)
+    save_db()
+    return jsonify(ok=True)
+
+
+@APP.post("/api/trickster/open")
+def trickster_open():
+    b = request.get_json(force=True) or {}
+    cid = campaign_by_id(b.get("campaign"))["id"]
+    prof = trickster_profile(cid, b.get("platform"))
+    if not prof:
+        return jsonify(error="No Trickster profile linked to this campaign yet (Settings > Accounts per campaign)."), 400
+    url = str(b.get("url") or "")
+    if url and not re.match(r"^https://", url):
+        url = ""
+    try:
+        d = trickster_call("profile-open", {"profile_id": prof, **({"url": url} if url else {})})
+    except Exception as e:  # noqa: BLE001
+        return jsonify(error=str(e)[:300]), 400
+    return jsonify(ok=True, profile=d.get("profile_id", prof), no=d.get("no"))
+
+
+@APP.post("/api/trickster/import")
+def trickster_import():
+    """A CSV or Excel sheet linking campaigns (by campaign name, or by the client email connected to the campaign)
+    to Trickster profiles. Headers are matched loosely: campaign/client, email, platform, trickster/profile."""
+    name = request.args.get("name") or "sheet.csv"
+    raw = request.get_data()
+    rows = []
+    try:
+        if name.lower().endswith((".xlsx", ".xlsm")):
+            import io
+            import openpyxl
+            ws = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True).active
+            rows = [[("" if v is None else str(v)).strip() for v in r] for r in ws.iter_rows(values_only=True)]
+        else:
+            import csv
+            import io
+            text = raw.decode("utf-8-sig", "replace")
+            dialect = csv.Sniffer().sniff(text[:2000], delimiters=",\t;") if text.strip() else csv.excel
+            rows = [[c.strip() for c in r] for r in csv.reader(io.StringIO(text), dialect)]
+    except Exception as e:  # noqa: BLE001
+        return jsonify(error=f"Couldn't read that sheet: {str(e)[:150]}"), 400
+    rows = [r for r in rows if any(r)]
+    if len(rows) < 2:
+        return jsonify(error="The sheet needs a header row and at least one row of links."), 400
+    head = [h.lower() for h in rows[0]]
+
+    def col(*words):
+        for i, h in enumerate(head):
+            if any(w in h for w in words):
+                return i
+        return None
+    c_camp, c_mail, c_plat = col("campaign", "client", "name"), col("email", "e-mail", "mail"), col("platform")
+    c_prof = col("trickster", "profile", "no.", "number")
+    if c_prof is None or (c_camp is None and c_mail is None):
+        return jsonify(error="Couldn't find the columns. Use headers like: Campaign (or Email), Platform (optional), Trickster profile."), 400
+    camps = campaigns()
+    by_name = {c["name"].strip().lower(): c["id"] for c in camps}
+    by_mail = {}
+    for c in camps:
+        e = (YT._names().get(c["id"]) or {}).get("email")
+        if e:
+            by_mail[e.lower()] = c["id"]
+    done, missed = 0, []
+    with LOCK:
+        for r in rows[1:]:
+            get = lambda i: r[i] if i is not None and i < len(r) else ""  # noqa: E731
+            prof = re.sub(r"[^\w .-]", "", get(c_prof)).strip()
+            if not prof:
+                continue
+            cid = by_name.get(get(c_camp).lower()) or by_mail.get(get(c_mail).lower())
+            if not cid:
+                missed.append(get(c_camp) or get(c_mail))
+                continue
+            plat = get(c_plat).lower().replace("twitter", "x")
+            plat = next((p for p in TRICK_PLATFORMS if p in plat), "default") if plat else "default"
+            DB.setdefault("accounts", {}).setdefault(cid, {}).setdefault("trickster", {})[plat] = prof
+            done += 1
+    save_db()
+    return jsonify(ok=True, linked=done, unmatched=missed[:30])
 
 
 # ---------------------------------------------------------------- Instagram and Facebook (per campaign)

@@ -83,6 +83,7 @@ h2{font-family:var(--display);font-weight:700;font-size:21px;text-transform:uppe
 .fd .desc{font-size:13px;color:var(--muted);white-space:pre-wrap;max-height:4.2em;overflow:hidden;word-break:break-word}
 .fd .row{flex-wrap:wrap}
 .brand-box{display:flex;flex-direction:column;gap:8px}.brand-box .row{gap:8px;align-items:center;flex-wrap:wrap}.brand-prev{max-width:100%;max-height:90px;object-fit:contain;align-self:flex-start;border:1px solid var(--line);border-radius:4px;background:#222}
+.trk-cell{display:flex;flex-direction:column;gap:2px;margin-left:auto}.trk-row{gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:8px}
 .plat-grid{display:flex;flex-direction:column;gap:10px}
 .plat-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--line)}
 .plat-name{min-width:130px}
@@ -400,6 +401,15 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
       <div class="panel" style="grid-column:1/-1" id="plat-panel">
         <h2>Accounts per campaign</h2>
         <p class="hint">Each campaign has its own account on every platform. Coloured = connected, grey = not yet. Click an icon to connect it or see its account.</p>
+        <details id="trk-setup"><summary>Trickster: open each campaign's accounts in its client's Trickster profile</summary>
+          <p class="hint">Link each campaign to the Trickster profile you keep for that client. Then every Open, upload and Studio button for that campaign opens inside that profile. Trickster must be open on this laptop with its API turned on (Trickster &gt; API panel).</p>
+          <div class="row"><label class="lbl" for="trk-port" style="margin:0">Port</label><input id="trk-port" type="number" style="width:110px" value="53200">
+            <label class="lbl" for="trk-token" style="margin:0">Token</label><input id="trk-token" type="password" class="mono" placeholder="Trickster > API > Copy token" style="flex:1;min-width:180px">
+            <button class="btn" id="trk-save" type="button">Save and test</button></div>
+          <p class="hint" id="trk-msg"></p>
+          <div class="row"><input type="file" id="trk-file" accept=".csv,.xlsx,.xlsm,.txt" hidden><button class="btn" id="trk-import" type="button">Import links from a sheet (Excel or CSV)...</button>
+            <span class="hint">Columns: Campaign (or the client's Email), Platform (optional), Trickster profile (its NO. or name). One row per campaign, or per platform.</span></div>
+        </details>
         <div id="plat-grid" class="plat-grid"></div>
         <div id="plat-detail"></div>
       </div>
@@ -782,7 +792,10 @@ function clipCard(c){
       up.append(b);
     });
   }
-  [['YouTube Studio', 'https://studio.youtube.com'], ['TikTok upload', 'https://www.tiktok.com/upload'], ['Instagram', 'https://www.instagram.com']].forEach(([t, u]) => { const a = el('a', 'btn', t); a.href = u; a.target = '_blank'; a.rel = 'noopener'; up.append(a); });
+  [['YouTube Studio', 'https://studio.youtube.com', 'youtube'], ['TikTok upload', 'https://www.tiktok.com/tiktokstudio/upload', 'tiktok'], ['Instagram', 'https://www.instagram.com', 'instagram']].forEach(([t, u, pf]) => {
+    const a = el('a', 'btn', t); a.href = u; a.target = '_blank'; a.rel = 'noopener';
+    if (trkProfile(c.campaign, pf)){ a.textContent = t + ' (Trickster)'; a.title = 'Opens in Trickster profile ' + trkProfile(c.campaign, pf); a.onclick = ev => { ev.preventDefault(); openInTrickster(c.campaign, pf, u); }; }
+    up.append(a); });
   m.append(up);
   if (yu.state === 'error') m.append(el('p', 'bad-line', 'YouTube upload failed: ' + yu.error));
   Object.entries(c.social || {}).forEach(([pf, st]) => {
@@ -1260,6 +1273,26 @@ async function loadMeta(){
 $('#meta-save').onclick = () => api('/api/meta/app', { app_id: $('#meta-id').value, app_secret: $('#meta-secret').value }).then(() => { $('#meta-secret').value = ''; toast('Saved. Now connect each campaign.'); loadMeta(); }).catch(e => toast(e.message));
 loadMeta();
 
+
+/* Trickster links */
+let TRK = { profiles: {} };
+const PURL = { tiktok: 'https://www.tiktok.com/tiktokstudio/upload', instagram: 'https://www.instagram.com/', youtube: 'https://studio.youtube.com', x: 'https://x.com/compose/post', facebook: 'https://www.facebook.com/' };
+async function loadTrickster(){ try { TRK = await api('/api/trickster'); } catch (e) {} $('#trk-port').value = TRK.port || 53200; $('#trk-token').placeholder = TRK.has_token ? 'Saved (paste again to change)' : 'Trickster > API > Copy token'; }
+function trkProfile(cid, p){ const t = (TRK.profiles || {})[cid] || {}; return (p && t[p]) || t.default || ''; }
+function openInTrickster(cid, p, url){
+  toast('Opening in Trickster...');
+  return api('/api/trickster/open', { campaign: cid, platform: p, url: url || PURL[p] || '' }, 'POST', 120000).then(r => toast('Opened in Trickster profile ' + (r.no || r.profile))).catch(e => toast(e.message));
+}
+$('#trk-save').onclick = () => { const body = { port: +$('#trk-port').value || 53200 }; if ($('#trk-token').value.trim()) body.token = $('#trk-token').value.trim();
+  api('/api/trickster/settings', body).then(r => { $('#trk-msg').textContent = r.message; $('#trk-token').value = ''; loadTrickster(); }).catch(e => toast(e.message)); };
+$('#trk-import').onclick = () => $('#trk-file').click();
+$('#trk-file').onchange = e => { const f = e.target.files[0]; if (!f) return; e.target.value = '';
+  const x = new XMLHttpRequest(); x.open('POST', '/api/trickster/import?name=' + encodeURIComponent(f.name));
+  x.onload = () => { let j = {}; try { j = JSON.parse(x.responseText); } catch (er) {} if (x.status !== 200){ toast(j.error || 'Import failed'); return; }
+    $('#trk-msg').textContent = 'Linked ' + j.linked + ' row' + (j.linked === 1 ? '' : 's') + '.' + (j.unmatched && j.unmatched.length ? ' Not matched to a campaign: ' + j.unmatched.join(', ') + ' (use the campaign name exactly as in Clip Engine, or the Google email it is connected to).' : '');
+    loadTrickster().then(loadPlatforms); };
+  x.send(f); };
+loadTrickster().then(() => { if (S && S.clips) renderClips(true); });
 /* platform icons per campaign */
 const PICON = {
   tiktok: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.6 3c.4 2.2 1.9 3.8 4.1 4v3.2c-1.5 0-2.9-.4-4.1-1.2v6.3a5.8 5.8 0 1 1-5.8-5.8c.3 0 .7 0 1 .1v3.3a2.6 2.6 0 1 0 1.6 2.4V3h3.2z"/></svg>',
@@ -1280,6 +1313,7 @@ function platState(cid, p){
 }
 async function loadPlatforms(){
   try { PL_LINKS = await api('/api/links'); } catch (e) { return; }
+  await loadTrickster();
   if (!YTS || !YTS.campaigns) await loadYT();
   if (!MS) await loadMeta();
   const g = $('#plat-grid'); g.innerHTML = '';
@@ -1295,7 +1329,11 @@ async function loadPlatforms(){
       b.onclick = () => platDetail(c, p);
       icons.append(wrap);
     });
-    row.append(icons); g.append(row);
+    row.append(icons);
+    const tw = el('label', 'trk-cell'); tw.append(el('span', 'hint', 'Trickster profile'));
+    const ti = el('input', 'mono'); ti.value = ((TRK.profiles || {})[c.id] || {}).default || ''; ti.placeholder = 'NO. or name'; ti.style.width = '110px';
+    ti.onchange = () => api('/api/trickster/link', { campaign: c.id, platform: 'default', profile: ti.value }).then(() => { toast('Saved'); loadTrickster().then(loadPlatforms); });
+    tw.append(ti); row.append(tw); g.append(row);
   });
 }
 function platDetail(c, p){
@@ -1333,6 +1371,13 @@ function platDetail(c, p){
   } else {
     handleEditor('X charges per post through its API, so post with the X compose page (signed in as this account). Save the account here so it’s on record for this campaign.', 'https://x.com/compose/post');
   }
+  const tr = el('div', 'row trk-row'); tr.append(el('span', 'lbl', 'Trickster profile for ' + PNAME[p]));
+  const own = (((TRK.profiles || {})[c.id] || {})[p]) || '';
+  const tin = el('input', 'mono'); tin.value = own; tin.placeholder = trkProfile(c.id) ? 'same as campaign (' + trkProfile(c.id) + ')' : 'NO. or name'; tin.style.width = '200px';
+  tin.onchange = () => api('/api/trickster/link', { campaign: c.id, platform: p, profile: tin.value }).then(() => { toast('Saved'); loadTrickster(); });
+  tr.append(tin);
+  const ob = el('button', 'btn', 'Open ' + PNAME[p] + ' in Trickster'); ob.type = 'button'; ob.onclick = () => openInTrickster(c.id, p); tr.append(ob);
+  box.append(tr);
   box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 /* campaign finder */
