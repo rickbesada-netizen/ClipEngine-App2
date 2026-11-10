@@ -88,8 +88,11 @@ h2{font-family:var(--display);font-weight:700;font-size:21px;text-transform:uppe
 .plat-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--line)}
 .plat-name{min-width:130px}
 .plat-icons{display:flex;gap:14px;flex-wrap:wrap}
-.plat-cell{display:flex;flex-direction:column;align-items:center;gap:3px;width:78px}
-.plat-cap{font-size:11px;color:var(--muted);max-width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.plat-cell{display:flex;flex-direction:column;align-items:center;gap:3px;width:120px}
+.plat-mail{font-size:10.5px;color:var(--ink);opacity:.75;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.signin-box > .btn,.signin-box > .go,.signin-box > a.btn{align-self:flex-start}
+.acct-line{margin:0;font-weight:600}
+.plat-cap{font-size:11px;color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .plat-ic{width:44px;height:44px;border-radius:50%;border:1px solid var(--line);background:var(--surface);display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9aa1ab;padding:0;opacity:.7}
 .plat-ic svg{width:22px;height:22px;fill:currentColor}
 .plat-ic:hover{opacity:1;border-color:var(--ink)}
@@ -1306,10 +1309,16 @@ const PORDER = ['tiktok', 'instagram', 'youtube', 'x', 'facebook'];
 let PL_LINKS = {};
 function platState(cid, p){
   const links = PL_LINKS[cid] || {};
-  if (p === 'youtube'){ const y = ((YTS && YTS.campaigns) || []).find(c => c.id === cid); if (y && y.own && y.channel && !/^\(no channel/.test(y.channel)) return { on: true, label: y.channel }; if (y && y.own) return { on: false, warn: true, label: 'no channel yet' }; return { on: false, label: links.youtube ? '@' + links.youtube : '' }; }
-  if (p === 'instagram'){ const m = MS && MS[cid]; if (m && m.connected && m.instagram) return { on: true, label: '@' + m.instagram }; return { on: false, label: links.instagram ? '@' + links.instagram : '' }; }
-  if (p === 'facebook'){ const m = MS && MS[cid]; if (m && m.connected) return { on: true, label: m.page }; return { on: false, label: links.facebook || '' }; }
-  return { on: !!links[p], label: links[p] ? '@' + links[p] : '' };
+  const typed = links[p + '_email'] || '';
+  if (p === 'youtube'){ const y = ((YTS && YTS.campaigns) || []).find(c => c.id === cid); const em = (y && y.own && y.email) || '';
+    if (y && y.own && y.channel && !/^\(no channel/.test(y.channel)) return { on: true, label: y.channel, email: em };
+    if (y && y.own) return { on: false, warn: true, label: 'no channel yet', email: em };
+    return { on: false, label: links.youtube ? '@' + links.youtube : '', email: '' }; }
+  if (p === 'instagram' || p === 'facebook'){ const m = MS && MS[cid]; const em = (m && m.connected && (m.email || m.user)) || '';
+    if (p === 'instagram' && m && m.connected && m.instagram) return { on: true, label: '@' + m.instagram, email: em };
+    if (p === 'facebook' && m && m.connected) return { on: true, label: m.page, email: em };
+    return { on: false, label: links[p] ? (p === 'instagram' ? '@' : '') + links[p] : '', email: '' }; }
+  return { on: !!links[p], label: links[p] ? '@' + links[p] : '', email: typed };
 }
 async function loadPlatforms(){
   try { PL_LINKS = await api('/api/links'); } catch (e) { return; }
@@ -1326,6 +1335,7 @@ async function loadPlatforms(){
       b.title = PNAME[p] + ': ' + (st.on ? 'connected' + (st.label ? ' (' + st.label + ')' : '') : st.warn ? st.label : 'not connected');
       b.setAttribute('aria-label', b.title); b.innerHTML = PICON[p];
       const cap = el('span', 'plat-cap', st.label || ''); const wrap = el('div', 'plat-cell'); wrap.append(b, cap);
+      if (st.email){ const em = el('span', 'plat-mail', st.email); em.title = st.email; wrap.append(em); b.title += ' \u2013 ' + st.email; }
       b.onclick = () => platDetail(c, p);
       icons.append(wrap);
     });
@@ -1341,12 +1351,15 @@ function platDetail(c, p){
   const st = platState(c.id, p);
   const top = el('div', 'row'); top.append(el('b', '', PNAME[p] + ' for ' + c.name));
   const x = el('button', 'btn', 'Close'); x.type = 'button'; x.onclick = () => { box.innerHTML = ''; box.className = ''; }; top.append(x); box.append(top);
+  if (st.email) box.append(el('p', 'acct-line', 'Account: ' + st.email + (st.label ? '  \u00b7  ' + st.label : '')));
   const handleEditor = (note, uploadUrl) => {
     box.append(el('p', 'hint', note));
     const r = el('div', 'row'); const inp = el('input', 'mono'); inp.placeholder = '@handle or profile link'; inp.value = (PL_LINKS[c.id] || {})[p] || ''; inp.style.flex = '1'; inp.style.minWidth = '0';
     const sv = el('button', 'go', 'Save'); sv.type = 'button'; sv.style.fontSize = '15px';
     sv.onclick = () => api('/api/links', { campaign: c.id, platform: p, handle: inp.value }).then(() => { toast('Saved'); loadPlatforms().then(() => platDetail(c, p)); }).catch(e => toast(e.message));
-    r.append(inp, sv); box.append(r);
+    const em = el('input', 'mono'); em.type = 'email'; em.placeholder = 'Account email (optional)'; em.value = (PL_LINKS[c.id] || {})[p + '_email'] || ''; em.style.flex = '1'; em.style.minWidth = '0';
+    sv.onclick = () => api('/api/links', { campaign: c.id, platform: p, handle: inp.value, email: em.value }).then(() => { toast('Saved'); loadPlatforms().then(() => platDetail(c, p)); }).catch(e => toast(e.message));
+    r.append(inp, em, sv); box.append(r);
     const h = (PL_LINKS[c.id] || {})[p];
     const r2 = el('div', 'row');
     if (h){ const pr = el('a', 'btn', 'Open @' + h); pr.target = '_blank'; pr.rel = 'noopener'; pr.href = p === 'tiktok' ? 'https://www.tiktok.com/@' + h : p === 'x' ? 'https://x.com/' + h : p === 'instagram' ? 'https://www.instagram.com/' + h + '/' : p === 'youtube' ? 'https://www.youtube.com/@' + h : 'https://www.facebook.com/' + h; r2.append(pr); }
@@ -1362,6 +1375,7 @@ function platDetail(c, p){
   } else if (p === 'instagram' || p === 'facebook'){
     if (!MS || !Object.keys(MS).length || ($('#meta-camps').textContent || '').includes('Not set up')){ box.append(el('p', 'hint', 'First do the one-time Meta setup in "Post to Instagram and Facebook" below.')); }
     if (st.on) box.append(el('p', 'ok-line', 'Connected: ' + (p === 'instagram' ? 'Reels post to ' + st.label : 'Reels post to the Page ' + st.label) + '.'));
+    if (st.on && MS[c.id] && !MS[c.id].email) box.append(el('p', 'hint', 'Connected before Clip Engine showed emails: press Change account once to show the login email here.'));
     else if (p === 'instagram' && MS && MS[c.id] && MS[c.id].connected) box.append(el('p', 'bad-line', 'The Facebook Page is connected, but no Instagram account is linked to it. In Instagram: switch to a Professional account and link it to the Page, then press Change account.'));
     const go = el('button', st.on ? 'btn' : 'go', st.on ? 'Change account' : 'Connect Facebook & Instagram'); go.type = 'button';
     go.onclick = () => startSignin('#plat-detail-signin', '/api/meta/connect', { campaign: c.id }, c.name, 'Facebook & Instagram', () => { loadMeta().then(loadPlatforms); });

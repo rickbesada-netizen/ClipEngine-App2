@@ -1182,6 +1182,19 @@ def links_set():
     plat = b.get("platform")
     if plat not in ("tiktok", "x", "instagram", "facebook", "youtube"):
         return jsonify(error="Unknown platform"), 400
+    if "email" in b:  # the email of the account on that platform, typed by hand (TikTok and X have no sign-in here)
+        em = (b.get("email") or "").strip()[:120]
+        if em and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", em):
+            return jsonify(error="That doesn't look like an email address."), 400
+        with LOCK:
+            links = DB.setdefault("accounts", {}).setdefault(campaign_by_id(b.get("campaign"))["id"], {}).setdefault("links", {})
+            if em:
+                links[plat + "_email"] = em
+            else:
+                links.pop(plat + "_email", None)
+        save_db()
+        if "handle" not in b:
+            return jsonify(ok=True)
     h = re.sub(r"^https?://(www\.)?(tiktok\.com/|x\.com/|twitter\.com/|instagram\.com/|facebook\.com/|youtube\.com/)", "", (b.get("handle") or "").strip())
     h = re.sub(r"[/?#].*$", "", h).lstrip("@")[:60]
     with LOCK:

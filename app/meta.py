@@ -22,7 +22,7 @@ import pipeline as P
 GRAPH = __import__("os").environ.get("CLIP_ENGINE_GRAPH") or "https://graph.facebook.com/v24.0"
 DIALOG = "https://www.facebook.com/v24.0/dialog/oauth"
 RELAY = "https://buildable-clip-factory.netlify.app/oauth/meta.html"  # forwards Meta's answer back to this computer
-SCOPES = ["pages_show_list", "pages_read_engagement", "pages_manage_posts", "instagram_basic",
+SCOPES = ["email", "pages_show_list", "pages_read_engagement", "pages_manage_posts", "instagram_basic",
           "instagram_content_publish", "business_management"]
 CONFIG = P.DATA / "meta_app.json"
 ACCOUNTS = P.DATA / "meta_accounts"
@@ -103,6 +103,7 @@ def public_status(campaign: str) -> dict:
     return {
         "connected": bool(page.get("token")),
         "user": a.get("user_name", ""),
+        "email": a.get("user_email", ""),
         "page": page.get("name", ""),
         "instagram": (page.get("ig") or {}).get("username", ""),
         "choices": [{"id": p["id"], "name": p["name"], "instagram": (p.get("ig") or {}).get("username", "")}
@@ -136,13 +137,13 @@ def finish_login(code: str, state: str) -> str:
     long_tok = _check(rq.get(f"{GRAPH}/oauth/access_token", params={
         "grant_type": "fb_exchange_token", "client_id": cfg["app_id"], "client_secret": cfg["app_secret"],
         "fb_exchange_token": tok}, timeout=30), "Keeping you signed in").get("access_token", tok)
-    me = _check(rq.get(f"{GRAPH}/me", params={"fields": "id,name", "access_token": long_tok}, timeout=30), "Reading your account")
+    me = _check(rq.get(f"{GRAPH}/me", params={"fields": "id,name,email", "access_token": long_tok}, timeout=30), "Reading your account")
     pages = _check(rq.get(f"{GRAPH}/me/accounts", params={
         "fields": "id,name,access_token,instagram_business_account{id,username}", "limit": 100,
         "access_token": long_tok}, timeout=30), "Listing your Facebook Pages").get("data", [])
     plist = [{"id": p["id"], "name": p.get("name", ""), "token": p.get("access_token", ""),
               "ig": p.get("instagram_business_account") or {}} for p in pages]
-    data = {"user_id": me.get("id"), "user_name": me.get("name", ""), "user_token": long_tok, "pages": plist,
+    data = {"user_id": me.get("id"), "user_name": me.get("name", ""), "user_email": me.get("email", ""), "user_token": long_tok, "pages": plist,
             "connected_at": time.time()}
     if len(plist) == 1:
         data["page"] = plist[0]
