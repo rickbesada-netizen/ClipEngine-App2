@@ -2534,9 +2534,15 @@ def _close_other_copies():
     try:
         out = subprocess.run(["powershell", "-NoProfile", "-Command",
                               "Get-CimInstance Win32_Process -Filter \"Name='ClipEngine.exe'\" | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId)\" }"],
-                             capture_output=True, text=True, timeout=20, creationflags=P._NO_WINDOW).stdout
-    except Exception:  # noqa: BLE001
-        traceback.print_exc(); return
+                             capture_output=True, text=True, timeout=40, creationflags=P._NO_WINDOW).stdout
+    except Exception:  # noqa: BLE001  PowerShell can be very slow on a busy PC: fall back to tasklist
+        try:
+            rows = subprocess.run(["tasklist", "/FI", "IMAGENAME eq ClipEngine.exe", "/FO", "CSV", "/NH"],
+                                  capture_output=True, text=True, timeout=20, creationflags=P._NO_WINDOW).stdout
+            out = "\n".join(f"{r.split(',')[1].strip(chr(34))} 0" for r in rows.splitlines() if r.count(",") >= 2)
+        except Exception as e:  # noqa: BLE001
+            print(f"Couldn't check for other Clip Engine copies ({type(e).__name__}); carrying on", flush=True)
+            return
     others = []
     for row in out.strip().splitlines():
         try:
