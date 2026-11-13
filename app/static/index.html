@@ -1028,10 +1028,29 @@ function startSignin(boxSel, apiPath, body, who, platform, after){
     let n = 0; const t = setInterval(() => { after(); if (++n > 60) clearInterval(t); }, 3000);
   }).catch(e => { if (w) w.close(); toast(e.message); });
 }
-function showSignin(boxSel, url, who, platform){
+function copySignin(boxSel, apiPath, body, who, platform, after){
+  // Makes the sign-in link without opening a tab, copies it, and shows it so it can be sent to someone else
+  api(apiPath, body).then(r => {
+    showSignin(boxSel, r.url, who, platform, true);
+    const done = () => toast('Sign-in link copied. Send it to whoever owns the account.');
+    navigator.clipboard.writeText(r.url).then(done, () => { const i = $(boxSel + ' input'); if (i){ i.select(); try { document.execCommand('copy'); done(); } catch (e) { toast('Press Copy link below'); } } });
+    let n = 0; const t = setInterval(() => { after(); if (++n > 60) clearInterval(t); }, 3000);
+  }).catch(e => toast(e.message));
+}
+function needIgSetup(boxSel){
   const box = $(boxSel); box.innerHTML = ''; box.className = 'signin-box';
+  box.append(el('b', '', 'Instagram-only sign-in isn\u2019t set up on this laptop yet'));
+  box.append(el('p', 'hint', 'Before Connect Instagram only can work, paste your Instagram app ID and Instagram app secret into the setup steps (now opened below), press Save, then press Connect Instagram only again.'));
+  const go = el('button', 'go', 'Show me the setup steps'); go.type = 'button'; go.style.fontSize = '15px';
+  go.onclick = () => { const d = $('#ig-setup'); d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+  box.append(go); $('#ig-setup').open = true;
+  box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+function showSignin(boxSel, url, who, platform, copied){
+  const box = $(boxSel); box.innerHTML = ''; box.className = 'signin-box';
+  setTimeout(() => box.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
   box.append(el('b', '', platform + ' sign-in for ' + who));
-  box.append(el('p', 'hint', 'A sign-in tab should have opened. If not, or if your partner should sign in on their own laptop or phone, copy this link and send it to them:'));
+  box.append(el('p', 'hint', copied ? 'This link is copied. Send it to the client or your partner: they open it, sign in, and allow access. Or press Open here to sign in on this laptop.' : 'A sign-in tab should have opened. If not, or if your partner should sign in on their own laptop or phone, copy this link and send it to them:'));
   const r1 = el('div', 'row'); const inp = el('input', 'mono'); inp.readOnly = true; inp.value = url; inp.style.flex = '1'; inp.style.minWidth = '0';
   const cp = el('button', 'go', 'Copy link'); cp.type = 'button'; cp.style.fontSize = '15px';
   cp.onclick = () => { navigator.clipboard.writeText(url).then(() => toast('Link copied. Send it to whoever owns the account.'), () => { inp.select(); document.execCommand('copy'); toast('Link copied'); }); };
@@ -1279,11 +1298,15 @@ async function loadMeta(){
     }
     if (c.connected && c.mode === 'ig') row.lastChild.textContent = 'Instagram @' + c.instagram + ' (Instagram only)';
     if (!c.connected || c.mode === 'ig'){ const ig = el('button', c.connected ? 'btn' : 'go', c.connected ? 'Change Instagram' : 'Connect Instagram only'); ig.type = 'button'; if (!c.connected) ig.style.fontSize = '15px';
-      ig.onclick = () => r.has_ig_app ? startSignin('#meta-signin', '/api/meta/connect', { campaign: c.id, mode: 'ig' }, c.name, 'Instagram', loadMeta) : ($('#ig-setup').open = true, toast('Do the Instagram-only setup below first'));
-      row.append(ig); }
+      ig.onclick = () => r.has_ig_app ? startSignin('#meta-signin', '/api/meta/connect', { campaign: c.id, mode: 'ig' }, c.name, 'Instagram', loadMeta) : needIgSetup('#meta-signin');
+      const igc = el('button', 'btn', 'Copy link'); igc.type = 'button'; igc.title = 'Copy an Instagram sign-in link to send to the client or your partner';
+      igc.onclick = () => r.has_ig_app ? copySignin('#meta-signin', '/api/meta/connect', { campaign: c.id, mode: 'ig' }, c.name, 'Instagram', loadMeta) : needIgSetup('#meta-signin');
+      row.append(ig, igc); }
     const go = el('button', c.connected ? 'btn' : 'go', c.connected && c.mode !== 'ig' ? 'Change account' : 'Connect Facebook & Instagram'); go.type = 'button'; if (!c.connected) go.style.fontSize = '15px';
     go.onclick = () => startSignin('#meta-signin', '/api/meta/connect', { campaign: c.id }, c.name, 'Facebook & Instagram', loadMeta);
-    row.append(go);
+    const goc = el('button', 'btn', 'Copy link'); goc.type = 'button'; goc.title = 'Copy a Facebook & Instagram sign-in link to send to the client or your partner';
+    goc.onclick = () => copySignin('#meta-signin', '/api/meta/connect', { campaign: c.id }, c.name, 'Facebook & Instagram', loadMeta);
+    row.append(go, goc);
     if (c.connected || c.choices.length){ const off = el('button', 'btn', 'Disconnect'); off.type = 'button'; off.onclick = () => api('/api/meta/disconnect', { campaign: c.id }).then(loadMeta); row.append(off); }
     tbl.append(row);
   });
@@ -1398,7 +1421,11 @@ function platDetail(c, p){
     go.onclick = () => startSignin('#plat-detail-signin', '/api/meta/connect', { campaign: c.id }, c.name, 'Facebook & Instagram', () => { loadMeta().then(loadPlatforms); });
     box.append(go);
     if (p === 'instagram'){ const ig = el('button', 'btn', 'Connect Instagram only (no Facebook needed)'); ig.type = 'button';
-      ig.onclick = () => startSignin('#plat-detail-signin', '/api/meta/connect', { campaign: c.id, mode: 'ig' }, c.name, 'Instagram', () => { loadMeta().then(loadPlatforms); }); box.append(ig); }
+      const after = () => { loadMeta().then(loadPlatforms); };
+      ig.onclick = () => startSignin('#plat-detail-signin', '/api/meta/connect', { campaign: c.id, mode: 'ig' }, c.name, 'Instagram', after);
+      const igc = el('button', 'btn', 'Copy link'); igc.type = 'button';
+      igc.onclick = () => copySignin('#plat-detail-signin', '/api/meta/connect', { campaign: c.id, mode: 'ig' }, c.name, 'Instagram', after);
+      box.append(ig, igc); }
     box.append(Object.assign(el('div'), { id: 'plat-detail-signin' }));
   } else if (p === 'tiktok'){
     handleEditor('TikTok doesn’t let apps post publicly without its review, so you post with the TikTok upload page (signed in as this account). Save the account here so it’s on record for this campaign and on every laptop.', 'https://www.tiktok.com/tiktokstudio/upload');
