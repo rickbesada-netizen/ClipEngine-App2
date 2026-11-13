@@ -22,6 +22,11 @@ import pipeline as P
 GRAPH = __import__("os").environ.get("CLIP_ENGINE_GRAPH") or "https://graph.facebook.com/v24.0"
 DIALOG = "https://www.facebook.com/v24.0/dialog/oauth"
 RELAY = "https://buildable-clip-factory.netlify.app/oauth/meta.html"  # forwards Meta's answer back to this computer
+# Instagram-only login (no Facebook account or Page needed): an Instagram Professional account signs in directly.
+IG_AUTH = "https://www.instagram.com/oauth/authorize"
+IG_TOKEN = __import__("os").environ.get("CLIP_ENGINE_IG_TOKEN_URL") or "https://api.instagram.com/oauth/access_token"
+IG_GRAPH = __import__("os").environ.get("CLIP_ENGINE_IG_GRAPH") or "https://graph.instagram.com/v24.0"
+IG_SCOPES = ["instagram_business_basic", "instagram_business_content_publish"]
 SCOPES = ["email", "pages_show_list", "pages_read_engagement", "pages_manage_posts", "instagram_basic",
           "instagram_content_publish", "business_management"]
 CONFIG = P.DATA / "meta_app.json"
@@ -67,13 +72,27 @@ def app_config() -> dict:
         return {}
 
 
+def save_ig_app(ig_app_id: str, ig_app_secret: str):
+    """The Instagram app ID and secret (Instagram > API setup with Instagram login), different from the Meta App ID."""
+    ig_app_id, ig_app_secret = (ig_app_id or "").strip(), (ig_app_secret or "").strip()
+    if not re.fullmatch(r"\d{6,20}", ig_app_id):
+        raise MetaError("The Instagram app ID is the long number under Instagram > API setup with Instagram login.")
+    if not re.fullmatch(r"[0-9a-f]{32}", ig_app_secret):
+        raise MetaError("The Instagram app secret is 32 letters and numbers (same page, press Show).")
+    cfg = app_config()
+    cfg.update(ig_app_id=ig_app_id, ig_app_secret=ig_app_secret)
+    CONFIG.write_text(json.dumps(cfg), encoding="utf-8")
+
+
 def save_app(app_id: str, app_secret: str):
     app_id, app_secret = (app_id or "").strip(), (app_secret or "").strip()
     if not re.fullmatch(r"\d{6,20}", app_id):
         raise MetaError("The App ID is the long number at the top of your app in developers.facebook.com.")
     if not re.fullmatch(r"[0-9a-f]{32}", app_secret):
         raise MetaError("The App Secret is 32 letters and numbers (App settings > Basic > App secret > Show).")
-    CONFIG.write_text(json.dumps({"app_id": app_id, "app_secret": app_secret}), encoding="utf-8")
+    cfg = app_config()
+    cfg.update(app_id=app_id, app_secret=app_secret)
+    CONFIG.write_text(json.dumps(cfg), encoding="utf-8")
 
 
 # ---------------------------------------------------------------- per-campaign accounts
@@ -99,8 +118,11 @@ def disconnect(campaign: str):
 
 def public_status(campaign: str) -> dict:
     a = account(campaign)
+    if a.get("mode") == "ig":
+        return {"connected": True, "mode": "ig", "user": a.get("ig_username", ""), "email": "", "page": "",
+                "instagram": a.get("ig_username", ""), "choices": []}
     page = a.get("page") or {}
-    return {
+    return {"mode": "facebook",
         "connected": bool(page.get("token")),
         "user": a.get("user_name", ""),
         "email": a.get("user_email", ""),
@@ -123,12 +145,63 @@ def login_url(campaign: str, port: int) -> str:
     return DIALOG + "?" + urllib.parse.urlencode(q)
 
 
+def ig_login_url(campaign: str, port: int) -> str:
+    cfg = app_config()
+    if not cfg.get("ig_app_id"):
+        raise MetaError("Add your Instagram app ID and secret first (setup step for Instagram-only login).")
+    nonce = secrets.token_urlsafe(16)
+    _PENDING[nonce] = {"campaign": campaign, "at": time.time(), "type": "ig"}
+    q = {"client_id": cfg["ig_app_id"], "redirect_uri": RELAY, "state": f"{port}.{nonce}", "response_type": "code",
+         "scope": ",".join(IG_SCOPES), "enable_fb_login": "0", "force_authentication": "1"}
+    return IG_AUTH + "?" + urllib.parse.urlencode(q)
+
+
+def _ig_finish(code: str, pend: dict) -> str:
+    cfg = app_config()
+    rq = _req()
+    code = code.split("#")[0]
+    short = _check(rq.post(IG_TOKEN, data={"client_id": cfg["ig_app_id"], "client_secret": cfg["ig_app_secret"],
+                                           "grant_type": "authorization_code", "redirect_uri": RELAY, "code": code}, timeout=30),
+                   "Signing in to Instagram")
+    if isinstance(short.get("data"), list) and short["data"]:
+        short = short["data"][0]
+    tok = short["access_token"]
+    long = _check(rq.get(f"{IG_GRAPH.rsplit('/v', 1)[0]}/access_token", params={
+        "grant_type": "ig_exchange_token", "client_secret": cfg["ig_app_secret"], "access_token": tok}, timeout=30),
+        "Keeping you signed in")
+    tok = long.get("access_token", tok)
+    me = _check(rq.get(f"{IG_GRAPH}/me", params={"fields": "user_id,username,account_type", "access_token": tok}, timeout=30),
+                "Reading the Instagram account")
+    if (me.get("account_type") or "").upper() not in ("", "BUSINESS", "MEDIA_CREATOR", "CREATOR"):
+        raise MetaError("That Instagram account is a personal account. In the Instagram app: Settings > Account type and tools > "
+                        "Switch to professional account (free), then press Connect again.")
+    _save_account(pend["campaign"], {"mode": "ig", "ig_token": tok, "ig_user_id": str(me.get("user_id") or me.get("id") or short.get("user_id")),
+                                     "ig_username": me.get("username", ""), "token_at": time.time(), "connected_at": time.time()})
+    return pend["campaign"]
+
+
+def _ig_token(campaign: str) -> tuple[str, str]:
+    """The campaign's Instagram token, refreshed when over a week old (they last 60 days, refreshing restarts the 60)."""
+    a = account(campaign)
+    if time.time() - a.get("token_at", 0) > 7 * 86400:
+        try:
+            r = _check(_req().get(f"{IG_GRAPH.rsplit('/v', 1)[0]}/refresh_access_token",
+                                  params={"grant_type": "ig_refresh_token", "access_token": a["ig_token"]}, timeout=30), "Refreshing")
+            a.update(ig_token=r.get("access_token", a["ig_token"]), token_at=time.time())
+            _save_account(campaign, a)
+        except MetaError:
+            pass
+    return a["ig_token"], a["ig_user_id"]
+
+
 def finish_login(code: str, state: str) -> str:
     """Called when Meta sends the user back. Returns the campaign id."""
-    nonce = state.split(".", 1)[-1]
+    nonce = state.split(".", 1)[-1].split("#")[0]
     pend = _PENDING.pop(nonce, None)
     if not pend or time.time() - pend["at"] > 1800:
         raise MetaError("That sign-in link expired. Press Connect again in Clip Engine.")
+    if pend.get("type") == "ig":
+        return _ig_finish(code, pend)
     cfg = app_config()
     rq = _req()
     tok = _check(rq.get(f"{GRAPH}/oauth/access_token", params={
@@ -188,20 +261,24 @@ def _upload_binary(url: str, token: str, path: Path, progress):
 
 def post_instagram(campaign: str, path: Path, caption: str, progress) -> dict:
     a = account(campaign)
-    page = a.get("page") or {}
-    ig = (page.get("ig") or {}).get("id")
-    if not ig:
-        raise MetaError("This campaign's Facebook Page has no Instagram professional account linked. In Instagram: "
-                        "Settings > Account type > switch to Professional, then link it to the Facebook Page, then press Connect again.")
-    tok = page["token"]
+    if a.get("mode") == "ig":
+        tok, ig = _ig_token(campaign)
+        base, uname = IG_GRAPH, a.get("ig_username", "")
+    else:
+        page = a.get("page") or {}
+        ig = (page.get("ig") or {}).get("id")
+        if not ig:
+            raise MetaError("This campaign's Facebook Page has no Instagram professional account linked. Use Connect Instagram only "
+                            "instead, or in Instagram switch to Professional and link it to the Facebook Page, then press Connect again.")
+        tok, base, uname = page["token"], GRAPH, (page.get("ig") or {}).get("username", "")
     rq = _req()
     progress(0.05)
-    c = _check(rq.post(f"{GRAPH}/{ig}/media", data={"media_type": "REELS", "upload_type": "resumable", "caption": caption[:2200],
+    c = _check(rq.post(f"{base}/{ig}/media", data={"media_type": "REELS", "upload_type": "resumable", "caption": caption[:2200],
                                                     "share_to_feed": "true", "access_token": tok}, timeout=60),
                "Starting the Instagram upload")
     _upload_binary(c["uri"], tok, path, progress)
     for i in range(120):  # Instagram processes the video, usually under a minute
-        st = _check(rq.get(f"{GRAPH}/{c['id']}", params={"fields": "status_code,status", "access_token": tok}, timeout=30),
+        st = _check(rq.get(f"{base}/{c['id']}", params={"fields": "status_code,status", "access_token": tok}, timeout=30),
                     "Checking the upload")
         if st.get("status_code") == "FINISHED":
             break
@@ -211,21 +288,24 @@ def post_instagram(campaign: str, path: Path, caption: str, progress) -> dict:
         time.sleep(5)
     else:
         raise MetaError("Instagram is still processing the video after 10 minutes. Check the account in a few minutes.")
-    pub = _check(rq.post(f"{GRAPH}/{ig}/media_publish", data={"creation_id": c["id"], "access_token": tok}, timeout=60),
+    pub = _check(rq.post(f"{base}/{ig}/media_publish", data={"creation_id": c["id"], "access_token": tok}, timeout=60),
                  "Publishing on Instagram")
     link = ""
     try:
-        link = _check(rq.get(f"{GRAPH}/{pub['id']}", params={"fields": "permalink", "access_token": tok}, timeout=30),
+        link = _check(rq.get(f"{base}/{pub['id']}", params={"fields": "permalink", "access_token": tok}, timeout=30),
                       "Getting the link").get("permalink", "")
     except MetaError:
         pass
     progress(1.0)
-    return {"id": pub["id"], "url": link or f"https://www.instagram.com/{(page.get('ig') or {}).get('username', '')}/",
-            "account": (page.get("ig") or {}).get("username", "")}
+    return {"id": pub["id"], "url": link or f"https://www.instagram.com/{uname}/",
+            "account": uname}
 
 
 def post_facebook(campaign: str, path: Path, caption: str, progress) -> dict:
     a = account(campaign)
+    if a.get("mode") == "ig":
+        raise MetaError("This campaign is connected with Instagram only, so there's no Facebook Page to post to. "
+                        "Use Connect Facebook & Instagram if the client has a Facebook Page.")
     page = a.get("page") or {}
     if not page.get("token"):
         raise MetaError("Connect this campaign's Facebook Page first (Settings).")

@@ -1594,6 +1594,7 @@ def trickster_import():
 def meta_status():
     cfg = META.app_config()
     return jsonify(has_app=bool(cfg.get("app_id")), app_id=cfg.get("app_id", ""), relay=META.RELAY,
+                   has_ig_app=bool(cfg.get("ig_app_id")), ig_app_id=cfg.get("ig_app_id", ""),
                    campaigns=[{"id": c["id"], "name": c["name"], **META.public_status(c["id"])} for c in campaigns()])
 
 
@@ -1601,7 +1602,10 @@ def meta_status():
 def meta_app():
     b = request.get_json(force=True) or {}
     try:
-        META.save_app(b.get("app_id", ""), b.get("app_secret", ""))
+        if "ig_app_id" in b:
+            META.save_ig_app(b.get("ig_app_id", ""), b.get("ig_app_secret", ""))
+        else:
+            META.save_app(b.get("app_id", ""), b.get("app_secret", ""))
     except META.MetaError as e:
         return jsonify(error=str(e)), 400
     return jsonify(ok=True)
@@ -1609,9 +1613,11 @@ def meta_app():
 
 @APP.post("/api/meta/connect")
 def meta_connect():
-    cid = (request.get_json(force=True) or {}).get("campaign")
+    b = request.get_json(force=True) or {}
+    cid = b.get("campaign")
     try:
-        url = META.login_url(campaign_by_id(cid)["id"], RUN_PORT)
+        fn = META.ig_login_url if b.get("mode") == "ig" else META.login_url
+        url = fn(campaign_by_id(cid)["id"], RUN_PORT)
     except META.MetaError as e:
         return jsonify(error=str(e)), 400
     return jsonify(ok=True, url=url)
@@ -1632,6 +1638,9 @@ def meta_callback():
     if st["choices"]:
         return page.format(f"<h2>Almost done</h2><p>Signed in for <b>{html.escape(name)}</b>. That account has several Facebook Pages: "
                            "go back to Clip Engine (Settings) and pick which Page this campaign posts to.</p>")
+    if st.get("mode") == "ig":
+        return page.format(f"<h2>Connected</h2><p><b>{html.escape(name)}</b> now posts Reels to Instagram "
+                           f"<b>@{html.escape(st['instagram'])}</b>.</p><p>You can close this tab.</p>")
     ig = f" and Instagram @{html.escape(st['instagram'])}" if st["instagram"] else " (no Instagram account is linked to this Page)"
     return page.format(f"<h2>Connected</h2><p><b>{html.escape(name)}</b> now posts to the Facebook Page "
                        f"<b>{html.escape(st['page'])}</b>{ig}.</p><p>You can close this tab.</p>")

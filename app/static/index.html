@@ -434,6 +434,17 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
             <li>Each client's Instagram must be a <b>Professional</b> account (Business or Creator) linked to their Facebook Page. Then press <b>Connect Facebook &amp; Instagram</b> next to the campaign, sign in with the client's Facebook, and leave every Page and permission ticked.</li>
           </ol>
         </details>
+        <details id="ig-setup"><summary>Instagram only, no Facebook account needed (one-time setup, about 10 minutes)</summary>
+          <ol class="steps">
+            <li>In the same Meta app (developers.facebook.com), open <b>Instagram &gt; API setup with Instagram login</b>.</li>
+            <li>Under <b>Set up Instagram business login</b> &gt; Business login settings, add the OAuth redirect URI <span class="mono" id="ig-relay"></span> and save.</li>
+            <li>Copy the <b>Instagram app ID</b> and <b>Instagram app secret</b> from that page into here:
+              <div class="row"><input id="ig-id" class="mono" placeholder="Instagram app ID" style="min-width:180px"><input id="ig-secret" class="mono" type="password" placeholder="Instagram app secret" style="min-width:260px"><button class="btn" id="ig-save" type="button">Save</button></div></li>
+            <li>Under <b>App roles &gt; Roles</b>, add each client's Instagram as an <b>Instagram Tester</b>. The client accepts it on instagram.com: Settings &gt; Apps and websites &gt; Tester invites (or keep the app Live).</li>
+            <li>The client's Instagram must be a <b>Professional</b> account (Business or Creator). In the Instagram app: Settings &gt; Account type and tools &gt; Switch to professional account. It's free and nothing else changes.</li>
+            <li>Press <b>Connect Instagram only</b> next to the campaign and sign in with the client's Instagram.</li>
+          </ol>
+        </details>
         <p class="notice">TikTok is not here on purpose: TikTok keeps every post from an unreviewed app private, so use the TikTok upload button on each clip. X charges per post through its API.</p>
       </div>
       <div class="panel" style="grid-column:1/-1">
@@ -786,7 +797,7 @@ function clipCard(c){
   const ms = MS && MS[c.campaign];
   if (ms && ms.connected && c.here !== false){
     const so = c.social || {};
-    [['instagram', ms.instagram ? 'Post to Instagram @' + ms.instagram : null], ['facebook', 'Post to Facebook (' + ms.page + ')']].forEach(([pf, label]) => {
+    [['instagram', ms.instagram ? 'Post to Instagram @' + ms.instagram : null], ['facebook', ms.mode === 'ig' ? null : 'Post to Facebook (' + ms.page + ')']].forEach(([pf, label]) => {
       if (!label) return;
       const st = so[pf] || {};
       const b = el('button', 'btn', st.state === 'uploading' ? 'Posting ' + Math.round((st.progress || 0) * 100) + '%' : st.state === 'done' ? label.replace('Post to', 'Posted to') : label); b.type = 'button';
@@ -1247,11 +1258,12 @@ let MS = null;
 async function loadMeta(){
   let r; try { r = await api('/api/meta'); } catch (e) { return; }
   MS = {}; r.campaigns.forEach(c => { MS[c.id] = c; });
-  $('#meta-relay').textContent = r.relay;
+  $('#meta-relay').textContent = r.relay; $('#ig-relay').textContent = r.relay;
+  if (r.ig_app_id) $('#ig-id').value = r.ig_app_id;
   if (r.app_id) $('#meta-id').value = r.app_id;
   $('#meta-setup').open = !r.has_app;
   const box = $('#meta-camps'); box.innerHTML = '';
-  if (!r.has_app){ box.append(el('p', 'hint', 'Not set up yet. Follow the one-time setup below.')); return; }
+  if (!r.has_app && !r.has_ig_app){ box.append(el('p', 'hint', 'Not set up yet. Follow a one-time setup below: Facebook & Instagram, or Instagram only (no Facebook account needed).')); return; }
   const tbl = el('div', 'ytc');
   r.campaigns.forEach(c => {
     const row = el('div', 'row ytc-row');
@@ -1265,7 +1277,11 @@ async function loadMeta(){
       sel.onchange = () => sel.value && api('/api/meta/choose', { campaign: c.id, page_id: sel.value }).then(loadMeta).catch(e => toast(e.message));
       row.append(sel);
     }
-    const go = el('button', c.connected ? 'btn' : 'go', c.connected ? 'Change account' : 'Connect Facebook & Instagram'); go.type = 'button'; if (!c.connected) go.style.fontSize = '15px';
+    if (c.connected && c.mode === 'ig') row.lastChild.textContent = 'Instagram @' + c.instagram + ' (Instagram only)';
+    if (!c.connected || c.mode === 'ig'){ const ig = el('button', c.connected ? 'btn' : 'go', c.connected ? 'Change Instagram' : 'Connect Instagram only'); ig.type = 'button'; if (!c.connected) ig.style.fontSize = '15px';
+      ig.onclick = () => r.has_ig_app ? startSignin('#meta-signin', '/api/meta/connect', { campaign: c.id, mode: 'ig' }, c.name, 'Instagram', loadMeta) : ($('#ig-setup').open = true, toast('Do the Instagram-only setup below first'));
+      row.append(ig); }
+    const go = el('button', c.connected ? 'btn' : 'go', c.connected && c.mode !== 'ig' ? 'Change account' : 'Connect Facebook & Instagram'); go.type = 'button'; if (!c.connected) go.style.fontSize = '15px';
     go.onclick = () => startSignin('#meta-signin', '/api/meta/connect', { campaign: c.id }, c.name, 'Facebook & Instagram', loadMeta);
     row.append(go);
     if (c.connected || c.choices.length){ const off = el('button', 'btn', 'Disconnect'); off.type = 'button'; off.onclick = () => api('/api/meta/disconnect', { campaign: c.id }).then(loadMeta); row.append(off); }
@@ -1273,6 +1289,7 @@ async function loadMeta(){
   });
   box.append(tbl);
 }
+$('#ig-save').onclick = () => api('/api/meta/app', { ig_app_id: $('#ig-id').value, ig_app_secret: $('#ig-secret').value }).then(() => { $('#ig-secret').value = ''; toast('Saved. Now press Connect Instagram only.'); loadMeta(); }).catch(e => toast(e.message));
 $('#meta-save').onclick = () => api('/api/meta/app', { app_id: $('#meta-id').value, app_secret: $('#meta-secret').value }).then(() => { $('#meta-secret').value = ''; toast('Saved. Now connect each campaign.'); loadMeta(); }).catch(e => toast(e.message));
 loadMeta();
 
@@ -1316,7 +1333,7 @@ function platState(cid, p){
     return { on: false, label: links.youtube ? '@' + links.youtube : '', email: '' }; }
   if (p === 'instagram' || p === 'facebook'){ const m = MS && MS[cid]; const em = (m && m.connected && (m.email || m.user)) || '';
     if (p === 'instagram' && m && m.connected && m.instagram) return { on: true, label: '@' + m.instagram, email: em };
-    if (p === 'facebook' && m && m.connected) return { on: true, label: m.page, email: em };
+    if (p === 'facebook' && m && m.connected && m.mode !== 'ig') return { on: true, label: m.page, email: em };
     return { on: false, label: links[p] ? (p === 'instagram' ? '@' : '') + links[p] : '', email: '' }; }
   return { on: !!links[p], label: links[p] ? '@' + links[p] : '', email: typed };
 }
@@ -1379,7 +1396,10 @@ function platDetail(c, p){
     else if (p === 'instagram' && MS && MS[c.id] && MS[c.id].connected) box.append(el('p', 'bad-line', 'The Facebook Page is connected, but no Instagram account is linked to it. In Instagram: switch to a Professional account and link it to the Page, then press Change account.'));
     const go = el('button', st.on ? 'btn' : 'go', st.on ? 'Change account' : 'Connect Facebook & Instagram'); go.type = 'button';
     go.onclick = () => startSignin('#plat-detail-signin', '/api/meta/connect', { campaign: c.id }, c.name, 'Facebook & Instagram', () => { loadMeta().then(loadPlatforms); });
-    box.append(go, Object.assign(el('div'), { id: 'plat-detail-signin' }));
+    box.append(go);
+    if (p === 'instagram'){ const ig = el('button', 'btn', 'Connect Instagram only (no Facebook needed)'); ig.type = 'button';
+      ig.onclick = () => startSignin('#plat-detail-signin', '/api/meta/connect', { campaign: c.id, mode: 'ig' }, c.name, 'Instagram', () => { loadMeta().then(loadPlatforms); }); box.append(ig); }
+    box.append(Object.assign(el('div'), { id: 'plat-detail-signin' }));
   } else if (p === 'tiktok'){
     handleEditor('TikTok doesn’t let apps post publicly without its review, so you post with the TikTok upload page (signed in as this account). Save the account here so it’s on record for this campaign and on every laptop.', 'https://www.tiktok.com/tiktokstudio/upload');
   } else {
