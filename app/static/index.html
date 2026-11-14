@@ -806,7 +806,9 @@ function clipCard(c){
       up.append(b);
     });
   }
+  const igDirect = !!(ms && ms.connected && ms.instagram && c.here !== false);
   [['YouTube Studio', 'https://studio.youtube.com', 'youtube'], ['TikTok upload', 'https://www.tiktok.com/tiktokstudio/upload', 'tiktok'], ['Instagram', 'https://www.instagram.com', 'instagram']].forEach(([t, u, pf]) => {
+    if (pf === 'instagram' && igDirect) t = 'Open Instagram';
     const a = el('a', 'btn', t); a.href = u; a.target = '_blank'; a.rel = 'noopener';
     if (trkProfile(c.campaign, pf)){ a.textContent = t + ' (Trickster)'; a.title = 'Opens in Trickster profile ' + trkProfile(c.campaign, pf); a.onclick = ev => { ev.preventDefault(); openInTrickster(c.campaign, pf, u); }; }
     up.append(a); });
@@ -1276,7 +1278,9 @@ async function loadClipsFolder(){
 let MS = null;
 async function loadMeta(){
   let r; try { r = await api('/api/meta'); } catch (e) { return; }
+  const before = JSON.stringify(MS);
   MS = {}; r.campaigns.forEach(c => { MS[c.id] = c; });
+  if (before !== JSON.stringify(MS) && typeof S !== 'undefined' && S && S.clips) renderClips(true);  // show/hide Post buttons right away
   $('#meta-relay').textContent = r.relay; $('#ig-relay').textContent = r.relay;
   if (r.ig_app_id) $('#ig-id').value = r.ig_app_id;
   if (r.app_id) $('#meta-id').value = r.app_id;
