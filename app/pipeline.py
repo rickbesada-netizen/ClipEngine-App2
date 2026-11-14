@@ -16,7 +16,7 @@ import numpy as np
 if getattr(sys, "frozen", False):
     # Packaged ClipEngine.exe: bundled files live in the unpack folder, user data sits next to the exe.
     APP_DIR = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
-    ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) if os.environ.get("CLIPENGINE_INSTALLED") == "1" else Path(sys.executable).resolve().parent
+    ROOT = (Path(os.environ["LOCALAPPDATA"]) if os.environ.get("LOCALAPPDATA") and Path(sys.executable).resolve().parent == Path(os.environ["LOCALAPPDATA"]).resolve() / "Programs" / "ClipEngine" else Path(sys.executable).resolve().parent)
     os.environ["PATH"] = str(APP_DIR) + os.pathsep + os.environ.get("PATH", "")  # bundled deno for yt-dlp
 else:
     APP_DIR = Path(__file__).resolve().parent
