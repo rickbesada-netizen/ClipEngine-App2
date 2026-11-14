@@ -111,15 +111,46 @@ jobs:
           Remove-Item -Recurse -Force "dist\ClipEngine data" -ErrorAction SilentlyContinue
           Write-Host "App started, answered, and a second launch handed over."
 
+      - name: Build ClipEngineSetup.exe
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $env:CLIPENGINE_VERSION = "1.9.${{ github.run_number }}"
+          & "${env:ProgramFiles(x86)}\\Inno Setup 6\\ISCC.exe" installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+          if (-not (Test-Path dist/ClipEngineSetup.exe)) { throw "Installer was not produced" }
+
+      - name: Verify installer installs and uninstalls
+        shell: pwsh
+        run: |
+          $setup = (Resolve-Path "dist/ClipEngineSetup.exe").Path
+          $target = Join-Path $env:LOCALAPPDATA "Programs\\ClipEngine"
+          $process = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer failed with exit code $($process.ExitCode)" }
+          $app = Join-Path $target "ClipEngine.exe"
+          if (-not (Test-Path $app)) { throw "Installed executable not found" }
+          $test = Start-Process -FilePath $app -ArgumentList "--selftest" -Wait -PassThru
+          $result = Join-Path $env:LOCALAPPDATA "ClipEngine data\\selftest.txt"
+          if ($test.ExitCode -ne 0 -or -not (Test-Path $result) -or (Get-Content $result -Raw).Trim() -ne "PASSED") {
+            throw "Installed ClipEngine self-test failed"
+          }
+          $uninstaller = Join-Path $target "unins000.exe"
+          if (-not (Test-Path $uninstaller)) { throw "Uninstaller not found" }
+          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstall failed" }
+          if (Test-Path $app) { throw "Uninstall left the executable behind" }
+
       - name: Publish download
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.1.${{ github.run_number }}
           name: Clip Engine for Windows (build ${{ github.run_number }})
           make_latest: true
-          files: dist/ClipEngine.exe
+          files: |
+            dist/ClipEngineSetup.exe
+            dist/ClipEngine.exe
           body: |
-            **Download ClipEngine.exe below** and double-click it. Your browser opens Clip Engine.
+            **Download ClipEngineSetup.exe to install Clip Engine** with a desktop shortcut and normal uninstaller. ClipEngine.exe remains available as a portable version.
 
             - Windows may say "Windows protected your PC" because the app isn't code-signed. Click **More info** then **Run anyway**.
             - Put the exe in its own folder (for example Documents\Clip Engine). Your clips are saved in a "ClipEngine data" folder next to it.
