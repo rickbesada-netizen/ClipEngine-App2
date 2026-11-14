@@ -33,3 +33,6 @@ Filename: "{app}\ClipEngine.exe"; Description: "Launch ClipEngine"; Flags: nowai
 
 [UninstallDelete]
 ; Do not delete clips or settings from %LOCALAPPDATA%\ClipEngine data.
+
+[Registry]
+Root: HKCU; Subkey: "Software\ClipEngine"; ValueType: string; ValueName: "InstallPath"; ValueData: "{app}"; Flags: uninsdeletekey
