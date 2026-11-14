@@ -273,21 +273,38 @@ def post_instagram(campaign: str, path: Path, caption: str, progress) -> dict:
         tok, base, uname = page["token"], GRAPH, (page.get("ig") or {}).get("username", "")
     rq = _req()
     progress(0.05)
-    c = _check(rq.post(f"{base}/{ig}/media", data={"media_type": "REELS", "upload_type": "resumable", "caption": caption[:2200],
-                                                    "share_to_feed": "true", "access_token": tok}, timeout=60),
-               "Starting the Instagram upload")
-    _upload_binary(c["uri"], tok, path, progress)
-    for i in range(120):  # Instagram processes the video, usually under a minute
-        st = _check(rq.get(f"{base}/{c['id']}", params={"fields": "status_code,status", "access_token": tok}, timeout=30),
-                    "Checking the upload")
-        if st.get("status_code") == "FINISHED":
-            break
-        if st.get("status_code") in ("ERROR", "EXPIRED"):
-            raise MetaError(f"Instagram couldn't process the video: {st.get('status', 'unknown error')}")
-        progress(0.7 + 0.25 * min(1, i / 40))
-        time.sleep(5)
-    else:
+
+    def wait_processed(cid, start=0.7):
+        for i in range(120):  # Instagram processes the video, usually under a minute
+            st = _check(rq.get(f"{base}/{cid}", params={"fields": "status_code,status", "access_token": tok}, timeout=30),
+                        "Checking the upload")
+            if st.get("status_code") == "FINISHED":
+                return
+            if st.get("status_code") in ("ERROR", "EXPIRED"):
+                raise MetaError(f"Instagram couldn't process the video: {st.get('status', 'unknown error')}")
+            progress(start + (0.95 - start) * min(1, i / 40))
+            time.sleep(5)
         raise MetaError("Instagram is still processing the video after 10 minutes. Check the account in a few minutes.")
+
+    if a.get("mode") == "ig":
+        # Instagram-only login can't take an uploaded file: Instagram fetches it from a temporary public address
+        import publicfile
+        progress(0.1)
+        try:
+            with publicfile.share(path) as url:
+                progress(0.3)
+                c = _check(rq.post(f"{base}/{ig}/media", data={"media_type": "REELS", "video_url": url, "caption": caption[:2200],
+                                                                "share_to_feed": "true", "access_token": tok}, timeout=120),
+                           "Starting the Instagram upload")
+                wait_processed(c["id"], 0.4)  # keep the address open until Instagram has fetched and processed it
+        except publicfile.ShareError as e:
+            raise MetaError(f"Couldn't give Instagram the video: {e} Check your internet connection and try again.") from None
+    else:
+        c = _check(rq.post(f"{base}/{ig}/media", data={"media_type": "REELS", "upload_type": "resumable", "caption": caption[:2200],
+                                                        "share_to_feed": "true", "access_token": tok}, timeout=60),
+                   "Starting the Instagram upload")
+        _upload_binary(c["uri"], tok, path, progress)
+        wait_processed(c["id"])
     pub = _check(rq.post(f"{base}/{ig}/media_publish", data={"creation_id": c["id"], "access_token": tok}, timeout=60),
                  "Publishing on Instagram")
     link = ""
