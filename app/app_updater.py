@@ -145,12 +145,25 @@ class UpdateService:
                 if f.read(2) != b"MZ":
                     raise RuntimeError("Downloaded installer is not a Windows executable")
             self._set_status(phase="installing", progress=100)
-            subprocess.Popen([path, "/VERYSILENT", "/SUPPRESSMSGBOXES",
-                              "/CLOSEAPPLICATIONS", "/NORESTART"],
-                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            # A detached Windows helper waits until Inno Setup completes,
+            # then reopens the installed app. The app exits to release its EXE.
+            # No shell=True or caller-provided download path is used.
+            setup = str(Path(path).resolve()).replace("'", "''")
+            exe = str(Path(self.executable).resolve()).replace("'", "''")
+            cmd = (
+                "$ErrorActionPreference='Stop'; "
+                "$p=Start-Process -FilePath '" + setup + "' "
+                "-ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/CLOSEAPPLICATIONS','/NORESTART') "
+                "-Wait -PassThru; "
+                "if($p.ExitCode -eq 0){Start-Process -FilePath '" + exe + "'}; "
+                "Remove-Item -LiteralPath '" + setup + "' -Force -ErrorAction SilentlyContinue"
+            )
+            subprocess.Popen(["powershell.exe", "-NoProfile", "-NonInteractive",
+                              "-ExecutionPolicy", "Bypass", "-Command", cmd],
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                             | getattr(subprocess, "DETACHED_PROCESS", 0),
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL)
-            # Inno Setup replaces the app only after ClipEngine exits.
             threading.Timer(2.0, lambda: os._exit(0)).start()
         except Exception as error:
             self._set_status(phase="error", error=f"{type(error).__name__}: {error}")
