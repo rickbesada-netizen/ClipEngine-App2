@@ -35,6 +35,7 @@ import campaign_import as CI  # noqa: E402
 import kit as KIT  # noqa: E402
 import cloudsync as CS  # noqa: E402
 import finder as FIND  # noqa: E402
+import app_updater  # noqa: E402
 
 APP = Flask(__name__, static_folder=str(P.APP_DIR / "static"), static_url_path="/static")
 DB_PATH = P.DATA / "db.json"
@@ -52,6 +53,8 @@ try:
 except Exception:  # noqa: BLE001
     BUILD = "dev"
 APP_VERSION = f"1.9.{BUILD}"  # must change every release: a new exe only replaces a running copy with a different version
+UPDATE_SERVICE = app_updater.UpdateService(BUILD)
+
 
 DEFAULT_SETTINGS = {
     "clips_per_video": 4, "min_len": 20, "max_len": 45, "layout": "auto", "captions": True,
@@ -857,6 +860,37 @@ def state():
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return jsonify(error=f"Clip Engine hit a problem loading your data: {str(e)[:200]}"), 500
+
+
+@APP.get("/api/update/check")
+def update_check():
+    """Check GitHub on demand; the browser calls this on launch and periodically."""
+    try:
+        return jsonify(UPDATE_SERVICE.check(force=request.args.get("force") == "1"))
+    except Exception as e:  # offline or rate limited: keep ClipEngine working
+        return jsonify(installed=UPDATE_SERVICE.is_installed(), available=False,
+                       build=BUILD, error=f"Update check unavailable: {str(e)[:140]}")
+
+
+@APP.get("/api/update/status")
+def update_status():
+    return jsonify(UPDATE_SERVICE.status())
+
+
+@APP.post("/api/update/install")
+def update_install():
+    """Only update an idle installed app. No client-supplied download URL."""
+    origin = request.headers.get("Origin", "")
+    expected = f"http://127.0.0.1:{RUN_PORT}"
+    if origin != expected:
+        return jsonify(error="Update requests must come from the local ClipEngine window"), 403
+    with LOCK:
+        busy = any(j.get("status") in ("running", "queued") for j in DB.get("jobs", []))
+        busy = busy or bool(DB.get("clips") and any(c.get("needs_recut") for c in DB["clips"]))
+    if busy:
+        return jsonify(error="Finish or stop all clip jobs before updating. Your clips will be preserved."), 409
+    result = UPDATE_SERVICE.start()
+    return (jsonify(result), 200) if result["ok"] else (jsonify(error=result["error"]), 409)
 
 
 @APP.get("/api/ollama")

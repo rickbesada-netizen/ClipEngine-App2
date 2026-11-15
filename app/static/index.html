@@ -178,6 +178,15 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
   </nav>
 </div></div>
 
+<div id="app-update-banner" hidden style="background:var(--surface);border-bottom:2px solid var(--signal);padding:10px 20px;">
+  <div style="max-width:1280px;margin:auto;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+    <strong id="app-update-message">An update is available.</strong>
+    <button id="app-update-install" class="btn" type="button">Update and restart</button>
+    <span id="app-update-progress" aria-live="polite"></span>
+    <button id="app-update-dismiss" class="btn" type="button" aria-label="Dismiss update notification">Not now</button>
+  </div>
+</div>
+
 <main>
   <section id="tab-make">
     <div class="grid">
@@ -488,6 +497,62 @@ const api = async (path, body, method, timeoutMs) => {
   return j;
 };
 function toast(m){ const t = $('#toast'); t.textContent = m; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => t.hidden = true, 2800); }
+
+/* Installed Windows builds check GitHub for updates, without interrupting clips.
+   The user approves installation; the app handles download, verification and restart. */
+let updateChecking = false, updateInProgress = false;
+async function checkClipEngineUpdate() {
+  if (updateChecking || updateInProgress) return;
+  updateChecking = true;
+  try {
+    const st = await api('/api/update/check', undefined, 'GET', 20000);
+    if (st.installed && st.available) {
+      $('#app-update-message').textContent = 'ClipEngine update available: build ' + st.latest;
+      $('#app-update-banner').hidden = false;
+    }
+  } catch (e) {
+    // Offline or GitHub unavailable: ClipEngine remains fully usable.
+  } finally {
+    updateChecking = false;
+  }
+}
+$('#app-update-dismiss').addEventListener('click', () => {
+  $('#app-update-banner').hidden = true;
+});
+$('#app-update-install').addEventListener('click', async () => {
+  if (updateInProgress) return;
+  if (!confirm('Download and install the new ClipEngine version now? Close any ongoing editing jobs first. Your clips and settings will be preserved.')) return;
+  try {
+    await api('/api/update/install', {}, 'POST', 20000);
+    updateInProgress = true;
+    $('#app-update-install').disabled = true;
+    $('#app-update-dismiss').hidden = true;
+    const progress = $('#app-update-progress');
+    progress.textContent = 'Downloading verified setup file...';
+    const timer = setInterval(async () => {
+      try {
+        const st = await api('/api/update/status', undefined, 'GET', 10000);
+        if (st.phase === 'downloading') progress.textContent = 'Downloading: ' + st.progress + '%';
+        else if (st.phase === 'installing') progress.textContent = 'Installing update and restarting...';
+        else if (st.phase === 'error') {
+          clearInterval(timer);
+          updateInProgress = false;
+          $('#app-update-install').disabled = false;
+          $('#app-update-dismiss').hidden = false;
+          progress.textContent = 'Update failed: ' + st.error;
+        }
+      } catch (e) {
+        // The existing app disappears while the new installer replaces it.
+        if (updateInProgress) progress.textContent = 'Restarting ClipEngine...';
+      }
+    }, 1500);
+  } catch (e) {
+    toast(e.message);
+  }
+});
+setTimeout(checkClipEngineUpdate, 2500);
+setInterval(checkClipEngineUpdate, 6 * 60 * 60 * 1000);
+
 async function copy(text){ try { await navigator.clipboard.writeText(text); toast('Copied'); } catch (e) { toast('Copy failed. Select the text and press Ctrl+C.'); } }
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const fmt = s => { s = Math.max(0, s || 0); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = Math.floor(s % 60); return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); };

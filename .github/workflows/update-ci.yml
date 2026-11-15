@@ -1,0 +1,27 @@
+name: In-app update checks
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [feature/in-app-auto-updates]
+jobs:
+  update-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile updater and server
+        run: python -m py_compile app/app_updater.py app/server.py
+      - name: Test release validation and installed detection
+        run: python -m unittest discover -s tests -p "test_app_updater.py" -v
+      - name: Check desktop page JavaScript
+        shell: pwsh
+        run: |
+          $html = Get-Content app/static/index.html -Raw
+          $m = [regex]::Matches($html, '(?s)<script>(.*?)</script>')
+          if ($m.Count -lt 1) { throw "No inline script found" }
+          Set-Content update-page-check.js $m[$m.Count - 1].Groups[1].Value
+          node --check update-page-check.js
+          if ($LASTEXITCODE -ne 0) { throw "Page script syntax error" }
