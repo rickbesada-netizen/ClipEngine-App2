@@ -11,5 +11,5 @@ python-docx>=1.1
 pillow>=10.0
 rapidocr_onnxruntime
 pystray>=0.19
-gdown>=5.2
+gdown>=5.2,<7
 openpyxl>=3.1

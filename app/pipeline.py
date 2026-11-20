@@ -284,12 +284,22 @@ def drive_import(url: str, dest: Path, progress, cancel) -> list[Path]:
                 lp = Path(f.local_path)
                 lp.parent.mkdir(parents=True, exist_ok=True)
                 if not (lp.exists() and lp.stat().st_size > 0):
+                    okf = set(__import__("inspect").signature(gdown.download).parameters)
                     gdown.download(id=f.id, output=str(lp), quiet=True, use_cookies=False, resume=True,
-                                   progress=cb_for(lp.name, i, len(vids)))
+                                   progress=cb_for(lp.name, i, len(vids)), **({"retries": 5} if "retries" in okf else {}))
                 got.append(lp)
         else:
-            out = gdown.download(url=url, output=str(dest) + os.sep, quiet=True, use_cookies=False, fuzzy=True,
-                                 progress=cb_for("file", 1, 1))
+            # Pass the file ID straight in: newer gdown versions dropped the fuzzy= link parsing option
+            m = re.search(r"/file/d/([\w-]{10,})", url) or re.search(r"[?&]id=([\w-]{10,})", url)
+            ok = set(__import__("inspect").signature(gdown.download).parameters)
+            kw = {k: v for k, v in {"quiet": True, "use_cookies": False, "resume": True, "retries": 5,
+                                     "progress": cb_for("file", 1, 1)}.items() if k in ok}
+            if m:
+                out = gdown.download(id=m.group(1), output=str(dest) + os.sep, **kw)
+            else:
+                if "fuzzy" in ok:
+                    kw["fuzzy"] = True
+                out = gdown.download(url=url, output=str(dest) + os.sep, **kw)
             if out:
                 got.append(Path(out))
     except Cancelled:
