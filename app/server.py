@@ -1562,6 +1562,20 @@ def trickster_open():
     return jsonify(ok=True, profile=d.get("profile_id", prof), no=d.get("no"))
 
 
+@APP.post("/api/trickster/close")
+def trickster_close():
+    """Closes the campaign's profile for that platform (used by Connect all, so 200 clients don't stay open)."""
+    b = request.get_json(force=True) or {}
+    prof = trickster_profile(campaign_by_id(b.get("campaign"))["id"], b.get("platform"))
+    if not prof:
+        return jsonify(ok=True)
+    try:
+        trickster_call("profile-close", {"profile_id": prof}, timeout=30)
+    except Exception as e:  # noqa: BLE001
+        return jsonify(ok=False, error=str(e)[:200])
+    return jsonify(ok=True)
+
+
 @APP.post("/api/trickster/import")
 def trickster_import():
     """A CSV or Excel sheet linking campaigns (by campaign name, or by the client email connected to the campaign)
@@ -1593,11 +1607,56 @@ def trickster_import():
             if any(w in h for w in words):
                 return i
         return None
-    c_camp, c_mail, c_plat = col("campaign", "client", "name"), col("email", "e-mail", "mail"), col("platform")
-    c_prof = col("trickster", "profile", "no.", "number")
-    if c_prof is None or (c_camp is None and c_mail is None):
-        return jsonify(error="Couldn't find the columns. Use headers like: Campaign (or Email), Platform (optional), Trickster profile."), 400
+    create = request.args.get("create") == "1"
+    # Per-platform profile columns ("YouTube profile", "Instagram", "TikTok Trickster" ...) win over the general one
+    plat_cols = {}
+    for i, h in enumerate(head):
+        hp = h.replace("twitter", "x ")
+        for p_ in TRICK_PLATFORMS:
+            if (p_ == "x" and re.search(r"\bx\b", hp)) or (p_ != "x" and p_ in hp):
+                if "email" not in hp and "mail" not in hp and "user" not in hp:
+                    plat_cols.setdefault(p_, i)
+    c_camp = col("campaign", "client")
+    if c_camp is None:
+        c_camp = next((i for i, h in enumerate(head) if "name" in h and "user" not in h and i not in plat_cols.values()), None)
+    c_mail, c_plat = col("email", "e-mail", "mail"), col("platform")
+    c_prof = next((i for i, h in enumerate(head) if any(w in h for w in ("trickster", "profile", "no.", "number"))
+                   and i not in plat_cols.values()), None)
+    c_tags = col("hashtag", "tags")
+    c_src = col("source", "link", "footage", "drive")
+    if (c_prof is None and not plat_cols) or (c_camp is None and c_mail is None):
+        return jsonify(error="Couldn't find the columns. Use headers like: Client (or Campaign), Trickster profile "
+                             "(or one column per platform: YouTube profile, Instagram profile, TikTok profile)."), 400
     camps = campaigns()
+    created = []
+    if create and c_camp is not None:
+        # One campaign per client: make the ones that don't exist yet, as copies of the "Any creator" template
+        known = {c["name"].strip().lower() for c in camps}
+        ids = {c["id"] for c in camps}
+        tmpl = next((c for c in camps if c["id"] == "generic"), None) or {
+            "pay": "", "sources": [], "hashtags": [], "extra_tags": [], "keywords": [],
+            "look_for_short": "funny, memorable or quotable", "look_for": ["Funny moments", "Strong quotes", "Big reactions"],
+            "platforms": ["Instagram Reels", "TikTok", "YouTube Shorts"], "submit_within_min": 0,
+            "rules": ["Check the campaign's own rules before posting"], "niche": "Best moments, quotes and funny clips", "join_url": ""}
+        for r in rows[1:]:
+            nm = (r[c_camp] if c_camp < len(r) else "").strip()[:80]
+            if not nm or nm.lower() in known:
+                continue
+            cid, k = slug(nm, 30), 2
+            while cid in ids:
+                cid = f"{slug(nm, 26)}-{k}"; k += 1
+            nc = json.loads(json.dumps(tmpl))
+            nc.update(id=cid, name=nm, sources=[], join_url="", pay="")
+            tg = (r[c_tags] if c_tags is not None and c_tags < len(r) else "")
+            if tg:
+                nc["hashtags"] = ["#" + t.lstrip("#") for t in re.split(r"[\s,;]+", tg) if t.strip("#")][:15]
+            sr = (r[c_src] if c_src is not None and c_src < len(r) else "")
+            if sr:
+                nc["sources"] = [u for u in re.split(r"[\s,;]+", sr) if u.startswith("http")][:20]
+            camps.append(nc); known.add(nm.lower()); ids.add(cid); created.append(nm)
+        if created:
+            write_campaigns_text(json.dumps(camps, indent=2), encoding="utf-8")
+            camps = campaigns()
     by_name = {c["name"].strip().lower(): c["id"] for c in camps}
     by_mail = {}
     for c in camps:
@@ -1608,19 +1667,24 @@ def trickster_import():
     with LOCK:
         for r in rows[1:]:
             get = lambda i: r[i] if i is not None and i < len(r) else ""  # noqa: E731
-            prof = re.sub(r"[^\w .-]", "", get(c_prof)).strip()
-            if not prof:
+            clean = lambda v: re.sub(r"[^\w .-]", "", v).strip()[:60]  # noqa: E731
+            prof = clean(get(c_prof))
+            per = {p_: clean(get(i)) for p_, i in plat_cols.items() if clean(get(i))}
+            if not prof and not per:
                 continue
             cid = by_name.get(get(c_camp).lower()) or by_mail.get(get(c_mail).lower())
             if not cid:
                 missed.append(get(c_camp) or get(c_mail))
                 continue
-            plat = get(c_plat).lower().replace("twitter", "x")
-            plat = next((p for p in TRICK_PLATFORMS if p in plat), "default") if plat else "default"
-            DB.setdefault("accounts", {}).setdefault(cid, {}).setdefault("trickster", {})[plat] = prof
+            t = DB.setdefault("accounts", {}).setdefault(cid, {}).setdefault("trickster", {})
+            if prof:
+                plat = get(c_plat).lower().replace("twitter", "x")
+                plat = next((p for p in TRICK_PLATFORMS if p in plat), "default") if plat else "default"
+                t[plat] = prof
+            t.update(per)
             done += 1
     save_db()
-    return jsonify(ok=True, linked=done, unmatched=missed[:30])
+    return jsonify(ok=True, linked=done, created=len(created), unmatched=missed[:30])
 
 
 # ---------------------------------------------------------------- Instagram and Facebook (per campaign)

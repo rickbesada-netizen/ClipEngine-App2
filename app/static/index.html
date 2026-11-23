@@ -159,6 +159,10 @@ details summary{cursor:pointer;color:var(--signal);font-weight:600;font-size:13p
 pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-height:260px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:10px;margin:8px 0 0}
 .ok-line{color:var(--ok);font-weight:600;margin:0} .bad-line{color:var(--bad);margin:0;font-size:13px}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
+.bulk{border:1px solid var(--line,#ddd);border-radius:10px;padding:12px 16px;margin:12px 0 16px}
+.bulk h3{margin:0 0 6px;font-size:16px}.bulk ol{margin:0;padding-left:20px}.bulk li{margin:6px 0}
+.bulk-now{border:2px solid #f2c200;border-radius:10px;padding:12px 14px;margin-top:10px}
+.bulk-now .big{font-size:17px;font-weight:700}.bulk-bar{height:8px;background:#e6e6e6;border-radius:4px;margin:8px 0}.bulk-bar i{display:block;height:100%;background:#2e9e5b;border-radius:4px}
 </style>
 </head>
 <body>
@@ -422,6 +426,19 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
           <div class="row"><input type="file" id="trk-file" accept=".csv,.xlsx,.xlsm,.txt" hidden><button class="btn" id="trk-import" type="button">Import links from a sheet (Excel or CSV)...</button>
             <span class="hint">Columns: Campaign (or the client's Email), Platform (optional), Trickster profile (its NO. or name). One row per campaign, or per platform.</span></div>
         </details>
+        <div class="bulk" id="bulk">
+          <h3>Add many clients at once</h3>
+          <ol class="hint">
+            <li><b>Fill in one sheet</b> with a row per client: the client's name, and its Trickster profile NO. (one column for all platforms, or one column per platform). Optional: Hashtags, Footage links. <a href="#" id="bulk-tmpl">Download the template</a></li>
+            <li><b>Import it.</b> Clip Engine makes a campaign for every client that isn't here yet and links its Trickster profiles. Importing the same sheet again only adds what's new.
+              <div class="row"><button class="go" id="bulk-import" type="button">Import clients from a sheet...</button><span class="hint" id="bulk-msg"></span></div></li>
+            <li><b>Connect all.</b> Clip Engine opens each client's sign-in in their Trickster profile, one after another. You just pick the account and press Allow; as soon as it's connected it closes that profile and opens the next client.
+              <div class="row"><select id="bulk-plat"><option value="youtube">YouTube</option><option value="ig">Instagram only</option><option value="meta">Facebook &amp; Instagram</option></select>
+                <label class="hint" style="margin:0"><input type="checkbox" id="bulk-only-trk" checked> only clients with a Trickster profile</label>
+                <button class="go" id="bulk-start" type="button">Connect all</button></div></li>
+          </ol>
+          <div id="bulk-run"></div>
+        </div>
         <div id="plat-grid" class="plat-grid"></div>
         <div id="plat-detail"></div>
       </div>
@@ -1422,6 +1439,73 @@ function openInTrickster(cid, p, url){
 }
 $('#trk-save').onclick = () => { const body = { port: +$('#trk-port').value || 53200 }; if ($('#trk-token').value.trim()) body.token = $('#trk-token').value.trim();
   api('/api/trickster/settings', body).then(r => { $('#trk-msg').textContent = r.message; $('#trk-token').value = ''; loadTrickster(); }).catch(e => toast(e.message)); };
+/* Add many clients at once */
+$('#bulk-tmpl').onclick = e => { e.preventDefault();
+  const csv = 'Client,YouTube profile,Instagram profile,TikTok profile,Hashtags,Footage links\r\nJane Smith Fitness,151,151,151,#fitness #gym,https://drive.google.com/...\r\nAcme Bakery,152,152,152,#bakery,\r\n';
+  const a = el('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'Clip Engine clients.csv'; a.click(); };
+$('#bulk-import').onclick = () => { const f = el('input'); f.type = 'file'; f.accept = '.csv,.xlsx,.xlsm,.txt';
+  f.onchange = () => { const x0 = f.files[0]; if (!x0) return; $('#bulk-msg').textContent = 'Importing...';
+    const x = new XMLHttpRequest(); x.open('POST', '/api/trickster/import?create=1&name=' + encodeURIComponent(x0.name));
+    x.onload = async () => { let j = {}; try { j = JSON.parse(x.responseText); } catch (er) {}
+      if (x.status !== 200){ $('#bulk-msg').textContent = ''; toast(j.error || 'Import failed'); return; }
+      $('#bulk-msg').textContent = 'Added ' + j.created + ' new client campaign' + (j.created === 1 ? '' : 's') + ', linked Trickster profiles for ' + j.linked + ' row' + (j.linked === 1 ? '' : 's') + '.' + (j.unmatched && j.unmatched.length ? ' Skipped: ' + j.unmatched.join(', ') : '');
+      try { await refreshCampaigns(); } catch (er) {} loadPlatforms(); };
+    x.send(x0); };
+  f.click(); };
+
+let BULK = null;
+function bulkDone(cid, mode){
+  if (mode === 'youtube'){ const y = ((YTS && YTS.campaigns) || []).find(c => c.id === cid); return !!(y && y.own); }
+  const m = MS && MS[cid]; if (!m || !m.connected) return false;
+  return mode === 'ig' ? !!m.instagram : true;
+}
+function bulkPlat(mode){ return mode === 'youtube' ? 'youtube' : 'instagram'; }
+async function bulkRefresh(){ if (BULK.mode === 'youtube') await loadYT(); else await loadMeta(); }
+async function bulkStart(){
+  const mode = $('#bulk-plat').value;
+  if (mode === 'youtube'){ await loadYT(); if (!YTS || !YTS.has_secret){ toast('Add your Google file first (YouTube panel below)'); needYtSetup('#bulk-run'); return; } }
+  else { await loadMeta(); }
+  const only = $('#bulk-only-trk').checked;
+  const list = (S.campaigns || []).filter(c => !bulkDone(c.id, mode) && (!only || trkProfile(c.id, bulkPlat(mode))));
+  if (!list.length){ toast(only ? 'Every client with a Trickster profile is already connected' : 'Every client is already connected'); return; }
+  BULK = { mode, list, i: 0, done: 0, skipped: 0, timer: null };
+  bulkStep();
+}
+function bulkStop(msg){ if (BULK && BULK.timer) clearInterval(BULK.timer); const b = BULK; BULK = null; loadPlatforms();
+  const box = $('#bulk-run'); box.innerHTML = ''; if (b) box.append(el('p', 'hint', msg || ('Stopped. Connected ' + b.done + ', skipped ' + b.skipped + '.'))); }
+function bulkNext(connected){
+  const b = BULK; if (!b) return; if (b.timer) clearInterval(b.timer);
+  const c = b.list[b.i]; if (connected) b.done++; else b.skipped++;
+  const tp = trkProfile(c.id, bulkPlat(b.mode)); if (tp) api('/api/trickster/close', { campaign: c.id, platform: bulkPlat(b.mode) }).catch(() => {});
+  b.i++;
+  if (b.i >= b.list.length){ bulkStop('All done: connected ' + b.done + ' client' + (b.done === 1 ? '' : 's') + (b.skipped ? ', skipped ' + b.skipped : '') + '.'); return; }
+  setTimeout(bulkStep, 800);
+}
+function bulkStep(){
+  const b = BULK; if (!b) return;
+  const c = b.list[b.i], plat = bulkPlat(b.mode), tp = trkProfile(c.id, plat);
+  const api_ = b.mode === 'youtube' ? '/api/youtube/connect' : '/api/meta/connect';
+  const body = b.mode === 'youtube' ? { campaign: c.id, own: true } : b.mode === 'ig' ? { campaign: c.id, mode: 'ig' } : { campaign: c.id };
+  const label = b.mode === 'youtube' ? 'YouTube (Google)' : b.mode === 'ig' ? 'Instagram' : 'Facebook & Instagram';
+  const box = $('#bulk-run'); box.innerHTML = ''; const now = el('div', 'bulk-now');
+  now.append(el('div', 'hint', 'Client ' + (b.i + 1) + ' of ' + b.list.length + ' · connected ' + b.done + (b.skipped ? ' · skipped ' + b.skipped : '')));
+  const bar = el('div', 'bulk-bar'); const fill = el('i'); fill.style.width = Math.round(100 * b.i / b.list.length) + '%'; bar.append(fill); now.append(bar);
+  now.append(el('div', 'big', c.name + (tp ? '  —  Trickster profile ' + tp : '')));
+  now.append(el('p', 'hint', tp ? 'The ' + label + ' sign-in is opening in that profile. Choose this client’s account and press Allow. Clip Engine moves on by itself once it’s connected.'
+                                  : 'This client has no Trickster profile: press Open sign-in (or Copy link), sign in with their account and press Allow.'));
+  const row = el('div', 'row');
+  const open = el('button', 'go', tp ? 'Open again in Trickster' : 'Open sign-in'); open.type = 'button';
+  open.onclick = () => tp ? trickSignin('#bulk-signin', api_, body, c.name, label, () => {}, c.id, plat) : startSignin('#bulk-signin', api_, body, c.name, label, () => {});
+  const cp = el('button', 'btn', 'Copy link'); cp.type = 'button'; cp.onclick = () => copySignin('#bulk-signin', api_, body, c.name, label, () => {});
+  const skip = el('button', 'btn', 'Skip this client'); skip.type = 'button'; skip.onclick = () => bulkNext(false);
+  const stop = el('button', 'btn', 'Stop'); stop.type = 'button'; stop.onclick = () => bulkStop();
+  row.append(open, cp, skip, stop); now.append(row, Object.assign(el('div'), { id: 'bulk-signin' })); box.append(now);
+  now.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (tp) trickSignin('#bulk-signin', api_, body, c.name, label, () => {}, c.id, plat);
+  b.timer = setInterval(async () => { if (BULK !== b) return; try { await bulkRefresh(); } catch (e) { return; }
+    if (bulkDone(c.id, b.mode)) { toast(c.name + ' connected'); bulkNext(true); } }, 3000);
+}
+$('#bulk-start').onclick = bulkStart;
 $('#trk-import').onclick = () => $('#trk-file').click();
 $('#trk-file').onchange = e => { const f = e.target.files[0]; if (!f) return; e.target.value = '';
   const x = new XMLHttpRequest(); x.open('POST', '/api/trickster/import?name=' + encodeURIComponent(f.name));
