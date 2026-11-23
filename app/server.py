@@ -1268,6 +1268,7 @@ def yt_status():
 def yt_secret():
     try:
         YT.save_secret(request.get_json(force=True).get("text", ""))
+        share_keys()
     except ValueError as e:
         return jsonify(error=str(e)), 400
     return jsonify(ok=True)
@@ -1703,9 +1704,13 @@ def meta_app():
         if "ig_app_id" in b:
             META.save_ig_app(b.get("ig_app_id", ""), b.get("ig_app_secret", ""))
         else:
+            if (b.get("app_id") or "").strip() and (b.get("app_id") or "").strip() == META.app_config().get("ig_app_id"):
+                return jsonify(error="That's your Instagram app ID. It goes in the \"Instagram only, no Facebook account "
+                                     "needed\" section below, not here."), 400
             META.save_app(b.get("app_id", ""), b.get("app_secret", ""))
     except META.MetaError as e:
         return jsonify(error=str(e)), 400
+    share_keys()
     return jsonify(ok=True)
 
 
@@ -2504,8 +2509,51 @@ def _sync_apply(merged: dict, snap: dict):
         tmp.replace(DB_PATH)
 
 
+# The Meta app keys and the Google sign-in file belong to Rick's account, not to one laptop: they ride along in
+# the synced settings, so setting them up once covers every laptop that signs in to Clip Engine.
+_META_KEYS = ("app_id", "app_secret", "ig_app_id", "ig_app_secret")
+
+
+def share_keys():
+    """Copies this laptop's app keys into the synced settings (after saving them, and at start-up)."""
+    changed = False
+    with LOCK:
+        st = DB["settings"]
+        cfg = {k: v for k, v in META.app_config().items() if k in _META_KEYS and v}
+        if cfg and {k: v for k, v in (st.get("_meta_app") or {}).items()} != {**(st.get("_meta_app") or {}), **cfg}:
+            st["_meta_app"] = {**(st.get("_meta_app") or {}), **cfg}; changed = True
+        try:
+            sec = json.loads(YT.SECRET.read_text(encoding="utf-8")) if YT.SECRET.exists() else None
+        except Exception:  # noqa: BLE001
+            sec = None
+        if sec and st.get("_yt_secret") != sec:
+            st["_yt_secret"] = sec; changed = True
+        if changed:
+            save_db()
+
+
+def restore_keys():
+    """Writes app keys that came from another laptop into this laptop's files (only fills in what's missing)."""
+    st = DB["settings"]
+    ma = st.get("_meta_app") or {}
+    if ma:
+        cfg = META.app_config()
+        add = {k: v for k, v in ma.items() if k in _META_KEYS and v and not cfg.get(k)}
+        if add:
+            cfg.update(add)
+            META.CONFIG.write_text(json.dumps(cfg), encoding="utf-8")
+    ys = st.get("_yt_secret")
+    if ys and not YT.SECRET.exists():
+        try:
+            YT.save_secret(json.dumps(ys))
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+
+
 def sync_now():
+    share_keys()
     SYNC.run(_sync_snapshot, _sync_apply)
+    restore_keys()
 
 
 def sync_loop():
@@ -2734,6 +2782,10 @@ if __name__ == "__main__":
             organise_clips()
         clean_old_captions()
         restore_set_aside_campaigns()
+        try:
+            restore_keys(); share_keys()
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
     except Exception:  # noqa: BLE001
         traceback.print_exc()
     threading.Thread(target=worker, daemon=True).start()
