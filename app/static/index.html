@@ -435,6 +435,7 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
             <li><b>Connect all.</b> Clip Engine opens each client's sign-in in their Trickster profile, one after another. You just pick the account and press Allow; as soon as it's connected it closes that profile and opens the next client.
               <div class="row"><select id="bulk-plat"><option value="youtube">YouTube</option><option value="ig">Instagram only</option><option value="meta">Facebook &amp; Instagram</option></select>
                 <label class="hint" style="margin:0"><input type="checkbox" id="bulk-only-trk" checked> only clients with a Trickster profile</label>
+                <label class="hint" style="margin:0" id="bulk-pro-l"><input type="checkbox" id="bulk-pro" checked> first make each Instagram Professional</label>
                 <button class="go" id="bulk-start" type="button">Connect all</button></div></li>
           </ol>
           <div id="bulk-run"></div>
@@ -1453,6 +1454,11 @@ $('#bulk-import').onclick = () => { const f = el('input'); f.type = 'file'; f.ac
     x.send(x0); };
   f.click(); };
 
+const IG_PRO_URL = 'https://www.instagram.com/accounts/convert_to_professional_account/';
+const IG_PRO_HINT = 'In Instagram: choose Creator (or Business), pick a category, and press Done. If Instagram shows "page not found", go to the menu (\u2630 More) > Settings > Account type and tools > Switch to professional account.';
+function openProSwitch(cid){ return openInTrickster(cid, 'instagram', IG_PRO_URL); }
+const bulkProToggle = () => { $('#bulk-pro-l').style.display = $('#bulk-plat').value === 'youtube' ? 'none' : ''; };
+$('#bulk-plat').onchange = bulkProToggle; bulkProToggle();
 let BULK = null;
 function bulkDone(cid, mode){
   if (mode === 'youtube'){ const y = ((YTS && YTS.campaigns) || []).find(c => c.id === cid); return !!(y && y.own); }
@@ -1468,7 +1474,7 @@ async function bulkStart(){
   const only = $('#bulk-only-trk').checked;
   const list = (S.campaigns || []).filter(c => !bulkDone(c.id, mode) && (!only || trkProfile(c.id, bulkPlat(mode))));
   if (!list.length){ toast(only ? 'Every client with a Trickster profile is already connected' : 'Every client is already connected'); return; }
-  BULK = { mode, list, i: 0, done: 0, skipped: 0, timer: null };
+  BULK = { mode, list, i: 0, done: 0, skipped: 0, timer: null, pro: mode !== 'youtube' && $('#bulk-pro').checked, stage: '' };
   bulkStep();
 }
 function bulkStop(msg){ if (BULK && BULK.timer) clearInterval(BULK.timer); const b = BULK; BULK = null; loadPlatforms();
@@ -1477,12 +1483,30 @@ function bulkNext(connected){
   const b = BULK; if (!b) return; if (b.timer) clearInterval(b.timer);
   const c = b.list[b.i]; if (connected) b.done++; else b.skipped++;
   const tp = trkProfile(c.id, bulkPlat(b.mode)); if (tp) api('/api/trickster/close', { campaign: c.id, platform: bulkPlat(b.mode) }).catch(() => {});
-  b.i++;
+  b.i++; b.stage = '';
   if (b.i >= b.list.length){ bulkStop('All done: connected ' + b.done + ' client' + (b.done === 1 ? '' : 's') + (b.skipped ? ', skipped ' + b.skipped : '') + '.'); return; }
   setTimeout(bulkStep, 800);
 }
+function bulkProStep(){
+  const b = BULK, c = b.list[b.i], tp = trkProfile(c.id, 'instagram');
+  const box = $('#bulk-run'); box.innerHTML = ''; const now = el('div', 'bulk-now');
+  now.append(el('div', 'hint', 'Client ' + (b.i + 1) + ' of ' + b.list.length + ' \u00b7 connected ' + b.done + (b.skipped ? ' \u00b7 skipped ' + b.skipped : '') + ' \u00b7 step 1 of 2: make Professional'));
+  const bar = el('div', 'bulk-bar'); const fill = el('i'); fill.style.width = Math.round(100 * b.i / b.list.length) + '%'; bar.append(fill); now.append(bar);
+  now.append(el('div', 'big', c.name + (tp ? '  \u2014  Trickster profile ' + tp : '')));
+  now.append(el('p', 'hint', (tp ? 'Instagram\u2019s "Switch to professional account" page is opening in that profile. ' : 'Open Instagram as this client. ') + IG_PRO_HINT));
+  const row = el('div', 'row');
+  const next = el('button', 'go', 'Done, now connect it'); next.type = 'button'; next.onclick = () => { b.stage = 'signin'; bulkStep(); };
+  const already = el('button', 'btn', 'Already Professional'); already.type = 'button'; already.onclick = () => { b.stage = 'signin'; bulkStep(); };
+  const again = el('button', 'btn', 'Open the page again'); again.type = 'button'; again.onclick = () => openProSwitch(c.id);
+  const skip = el('button', 'btn', 'Skip this client'); skip.type = 'button'; skip.onclick = () => bulkNext(false);
+  const stop = el('button', 'btn', 'Stop'); stop.type = 'button'; stop.onclick = () => bulkStop();
+  row.append(next, already); if (tp) row.append(again); row.append(skip, stop); now.append(row); box.append(now);
+  now.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (tp) openProSwitch(c.id);
+}
 function bulkStep(){
   const b = BULK; if (!b) return;
+  if (b.pro && b.stage !== 'signin') return bulkProStep();
   const c = b.list[b.i], plat = bulkPlat(b.mode), tp = trkProfile(c.id, plat);
   const api_ = b.mode === 'youtube' ? '/api/youtube/connect' : '/api/meta/connect';
   const body = b.mode === 'youtube' ? { campaign: c.id, own: true } : b.mode === 'ig' ? { campaign: c.id, mode: 'ig' } : { campaign: c.id };
@@ -1617,6 +1641,8 @@ function platDetail(c, p){
       igc.onclick = () => copySignin('#plat-detail-signin', '/api/meta/connect', { campaign: c.id, mode: 'ig' }, c.name, 'Instagram', after);
       box.append(ig, igc);
       const tpi = trkProfile(c.id, 'instagram');
+      if (tpi){ const mp = el('button', 'btn', 'Make Professional (Trickster ' + tpi + ')'); mp.type = 'button'; mp.title = IG_PRO_HINT;
+        mp.onclick = () => { openProSwitch(c.id); toast(IG_PRO_HINT); }; box.append(mp); }
       if (tpi){ const tk = el('button', 'btn', 'Sign in inside Trickster profile ' + tpi); tk.type = 'button';
         tk.onclick = () => trickSignin('#plat-detail-signin', '/api/meta/connect', { campaign: c.id, mode: 'ig' }, c.name, 'Instagram', after, c.id, 'instagram');
         box.append(tk); } }
