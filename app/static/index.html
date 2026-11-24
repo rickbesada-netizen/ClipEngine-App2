@@ -433,7 +433,7 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
             <li><b>Import it.</b> Clip Engine makes a campaign for every client that isn't here yet and links its Trickster profiles. Importing the same sheet again only adds what's new.
               <div class="row"><button class="go" id="bulk-import" type="button">Import clients from a sheet...</button><span class="hint" id="bulk-msg"></span></div></li>
             <li><b>Connect all.</b> Clip Engine opens each client's sign-in in their Trickster profile, one after another. You just pick the account and press Allow; as soon as it's connected it closes that profile and opens the next client.
-              <div class="row"><select id="bulk-plat"><option value="youtube">YouTube</option><option value="ig">Instagram only</option><option value="meta">Facebook &amp; Instagram</option></select>
+              <div class="row"><select id="bulk-plat"><option value="youtube">YouTube</option><option value="ig">Instagram only</option><option value="tiktok">TikTok</option><option value="meta">Facebook &amp; Instagram</option></select>
                 <label class="hint" style="margin:0"><input type="checkbox" id="bulk-only-trk" checked> only clients with a Trickster profile</label>
                 <label class="hint" style="margin:0" id="bulk-pro-l"><input type="checkbox" id="bulk-pro" checked> first make each Instagram Professional</label>
                 <button class="go" id="bulk-start" type="button">Connect all</button></div></li>
@@ -472,7 +472,25 @@ pre.brief{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;max-heig
             <li>Press <b>Connect Instagram only</b> next to the campaign and sign in with the client's Instagram.</li>
           </ol>
         </details>
-        <p class="notice">TikTok is not here on purpose: TikTok keeps every post from an unreviewed app private, so use the TikTok upload button on each clip. X charges per post through its API.</p>
+        <p class="notice">TikTok has its own section below. X charges per post through its API, so post to X with the X button on each clip.</p>
+      </div>
+      <div class="panel" style="grid-column:1/-1" id="tt-panel">
+        <h2>Post to TikTok from Clip Engine</h2>
+        <p class="hint">Each campaign posts to its own client's TikTok account. Uses your own free TikTok developer app, and videos upload straight from this laptop. Until TikTok audits your app, TikTok only lets it post to accounts set to <b>private</b>, and posts are visible to the account only. After the audit, posts can be public.</p>
+        <div id="tt-camps"></div>
+        <div id="tt-signin"></div>
+        <details id="tt-setup"><summary>One-time setup (about 15 minutes, free)</summary>
+          <ol class="steps">
+            <li>On <a href="https://developers.tiktok.com/apps" target="_blank" rel="noopener">developers.tiktok.com</a>, open your <b>Clip Engine</b> app. Under <b>App details</b> fill in: an app icon (1024 &times; 1024), a <b>Category</b>, the <b>Description</b> <span class="mono">Posts our clients' short videos to their own TikTok accounts, with their permission.</span>, Terms of Service URL <span class="mono">https://buildable-clip-factory.netlify.app/terms.html</span>, Privacy Policy URL <span class="mono">https://buildable-clip-factory.netlify.app/privacy.html</span>, and tick the platform <b>Web</b> (website <span class="mono">https://buildable-clip-factory.netlify.app</span>). Press <b>Save</b>.</li>
+            <li><b>Products &gt; Add products</b>: add <b>Login Kit</b> and <b>Content Posting API</b>. In Login Kit, add the Redirect URI <span class="mono tt-relay"></span>. In Content Posting API, turn on <b>Direct Post</b>.</li>
+            <li><b>Scopes &gt; Add scopes</b>: add <b>user.info.basic</b> and <b>video.publish</b>. Nothing else (extra scopes slow down TikTok's review).</li>
+            <li><b>To use it before TikTok reviews the app</b>: switch to the <b>Sandbox</b> tab at the top, create a sandbox, repeat steps 2 and 3 there, and under <b>Sandbox settings &gt; Target users</b> add each client's TikTok account you want to test with. Use the sandbox's Client key and secret below. After TikTok approves the app, paste the Production ones instead.</li>
+            <li>Copy the <b>Client key</b> and <b>Client secret</b> (App details &gt; Credentials, press the eye) into here:
+              <div class="row"><input id="tt-key" class="mono" placeholder="Client key" style="min-width:200px"><input id="tt-secret" class="mono" type="password" placeholder="Client secret" style="min-width:260px"><button class="btn" id="tt-save" type="button">Save</button></div></li>
+            <li>Press <b>Connect TikTok</b> next to each campaign (or <b>In Trickster</b>, or use Connect all) and sign in with the client's TikTok.</li>
+            <li>When you're ready for public posts, press <b>Submit for review</b> on developers.tiktok.com with a screen recording of Clip Engine connecting a TikTok and posting a clip.</li>
+          </ol>
+        </details>
       </div>
       <div class="panel" style="grid-column:1/-1">
         <h2>Upload to YouTube from Clip Engine</h2>
@@ -889,6 +907,16 @@ function clipCard(c){
       up.append(b);
     });
   }
+  const tts = ttCamp(c.campaign);
+  let ttHost = null;
+  if (tts.connected && c.here !== false){
+    const st = (c.social || {}).tiktok || {};
+    const lab = 'Post to TikTok @' + (tts.username || tts.nickname || '');
+    const b = el('button', 'btn', st.state === 'uploading' ? 'Posting to TikTok ' + Math.round((st.progress || 0) * 100) + '%' : st.state === 'done' ? lab.replace('Post to', 'Posted to') : lab); b.type = 'button';
+    b.disabled = st.state === 'uploading'; ttHost = el('div');
+    b.onclick = () => ttPostBox(c, ttHost);
+    up.append(b);
+  }
   const igDirect = !!(ms && ms.connected && ms.instagram && c.here !== false);
   [['YouTube Studio', 'https://studio.youtube.com', 'youtube'], ['TikTok upload', 'https://www.tiktok.com/tiktokstudio/upload', 'tiktok'], ['Instagram', 'https://www.instagram.com', 'instagram']].forEach(([t, u, pf]) => {
     if (pf === 'instagram' && igDirect) t = 'Open Instagram';
@@ -896,6 +924,7 @@ function clipCard(c){
     if (trkProfile(c.campaign, pf)){ a.textContent = t + ' (Trickster)'; a.title = 'Opens in Trickster profile ' + trkProfile(c.campaign, pf); a.onclick = ev => { ev.preventDefault(); openInTrickster(c.campaign, pf, u); }; }
     up.append(a); });
   m.append(up);
+  if (ttHost) m.append(ttHost);
   if (yu.state === 'error') m.append(el('p', 'bad-line', 'YouTube upload failed: ' + yu.error));
   Object.entries(c.social || {}).forEach(([pf, st]) => {
     const nm = pf === 'instagram' ? 'Instagram' : 'Facebook';
@@ -1103,6 +1132,7 @@ async function refreshCampaigns(selectId){
 
 /* youtube */
 let YTS = null;
+let TTS = null;
 
 /* sign-in links: open here, or copy for a partner on another laptop or phone */
 function startSignin(boxSel, apiPath, body, who, platform, after){
@@ -1163,7 +1193,7 @@ function showSignin(boxSel, url, who, platform, copied){
   box.append(el('p', 'hint', 'On another laptop or phone: after they sign in and allow access, their browser ends on a page that won\u2019t load (\u201cThis site can\u2019t be reached\u201d). That\u2019s expected. They copy the whole address from the address bar and send it back. Paste it here within 10 minutes:'));
   const r2 = el('div', 'row'); const back = el('input', 'mono'); back.placeholder = 'http://127.0.0.1:5050/oauth/...?code=...'; back.style.flex = '1'; back.style.minWidth = '0';
   const fin = el('button', 'btn', 'Finish connecting'); fin.type = 'button';
-  fin.onclick = () => api('/api/oauth/finish', { url: back.value }).then(x => { toast(x.campaign + ' is connected to ' + x.platform); box.innerHTML = ''; box.className = ''; loadYT(); loadMeta(); }).catch(e => toast(e.message));
+  fin.onclick = () => api('/api/oauth/finish', { url: back.value }).then(x => { toast(x.campaign + ' is connected to ' + x.platform); box.innerHTML = ''; box.className = ''; loadYT(); loadMeta(); loadTT(); }).catch(e => toast(e.message));
   r2.append(back, fin); box.append(r2);
   box.append(el('p', 'hint', 'The link only works with this Clip Engine and expires after an hour. Press Connect again for a new one.'));
 }
@@ -1427,6 +1457,7 @@ async function loadMeta(){
 $('#ig-save').onclick = () => api('/api/meta/app', { ig_app_id: $('#ig-id').value, ig_app_secret: $('#ig-secret').value }).then(() => { $('#ig-secret').value = ''; toast('Saved. Now press Connect Instagram only.'); loadMeta(); }).catch(e => toast(e.message));
 $('#meta-save').onclick = () => api('/api/meta/app', { app_id: $('#meta-id').value, app_secret: $('#meta-secret').value }).then(() => { $('#meta-secret').value = ''; toast('Saved. Now connect each campaign.'); loadMeta(); }).catch(e => toast(e.message));
 loadMeta();
+loadTT();
 
 
 /* Trickster links */
@@ -1457,24 +1488,80 @@ $('#bulk-import').onclick = () => { const f = el('input'); f.type = 'file'; f.ac
 const IG_PRO_URL = 'https://www.instagram.com/accounts/convert_to_professional_account/';
 const IG_PRO_HINT = 'In Instagram: choose Creator (or Business), pick a category, and press Done. If Instagram shows "page not found", go to the menu (\u2630 More) > Settings > Account type and tools > Switch to professional account.';
 function openProSwitch(cid){ return openInTrickster(cid, 'instagram', IG_PRO_URL); }
-const bulkProToggle = () => { $('#bulk-pro-l').style.display = $('#bulk-plat').value === 'youtube' ? 'none' : ''; };
+const bulkProToggle = () => { $('#bulk-pro-l').style.display = ['ig', 'meta'].includes($('#bulk-plat').value) ? '' : 'none'; };
 $('#bulk-plat').onchange = bulkProToggle; bulkProToggle();
+/* TikTok */
+const TT_PRIV = { PUBLIC_TO_EVERYONE: 'Everyone', MUTUAL_FOLLOW_FRIENDS: 'Friends', FOLLOWER_OF_CREATOR: 'Followers', SELF_ONLY: 'Only me' };
+function ttCamp(cid){ return ((TTS && TTS.campaigns) || []).find(c => c.id === cid) || {}; }
+async function loadTT(){
+  const before = JSON.stringify(TTS && TTS.campaigns);
+  try { TTS = await api('/api/tiktok'); } catch (e) { return; }
+  if (before !== JSON.stringify(TTS.campaigns) && typeof S !== 'undefined' && S && S.clips) renderClips(true);  // show/hide Post to TikTok right away
+  document.querySelectorAll('.tt-relay').forEach(x => x.textContent = 'https://buildable-clip-factory.netlify.app/oauth/meta.html');
+  if (TTS.client_key && !$('#tt-key').value) $('#tt-key').value = TTS.client_key;
+  const box = $('#tt-camps'); box.innerHTML = '';
+  if (!TTS.has_app){ box.append(el('p', 'hint', 'Not set up yet. Follow the one-time setup below.')); $('#tt-setup').open = true; return; }
+  ((S && S.campaigns) || []).forEach(c => {
+    const st = ttCamp(c.id); const row = el('div', 'row'); row.style.alignItems = 'center';
+    row.append(el('b', '', c.name), el('span', st.connected ? 'ok-line' : 'hint', st.connected ? 'TikTok @' + (st.username || st.nickname || 'connected') + (st.expired ? ' (sign-in expired)' : '') : 'not connected yet'));
+    const body = { campaign: c.id };
+    const go = el('button', st.connected ? 'btn' : 'go', st.connected ? 'Change TikTok' : 'Connect TikTok'); go.type = 'button';
+    go.onclick = () => startSignin('#tt-signin', '/api/tiktok/connect', body, c.name, 'TikTok', loadTT);
+    const cp = el('button', 'btn', 'Copy link'); cp.type = 'button'; cp.onclick = () => copySignin('#tt-signin', '/api/tiktok/connect', body, c.name, 'TikTok', loadTT);
+    row.append(go, cp);
+    const tp = trkProfile(c.id, 'tiktok');
+    if (tp){ const tk = el('button', 'btn', 'In Trickster ' + tp); tk.type = 'button'; tk.onclick = () => trickSignin('#tt-signin', '/api/tiktok/connect', body, c.name, 'TikTok', loadTT, c.id, 'tiktok'); row.append(tk); }
+    if (st.connected){ const dc = el('button', 'btn', 'Disconnect'); dc.type = 'button'; dc.onclick = () => api('/api/tiktok/disconnect', body).then(() => { toast('Disconnected'); loadTT(); }); row.append(dc); }
+    box.append(row);
+  });
+}
+$('#tt-save').onclick = () => api('/api/tiktok/app', { client_key: $('#tt-key').value, client_secret: $('#tt-secret').value })
+  .then(() => { toast('TikTok app saved'); $('#tt-secret').value = ''; loadTT(); }).catch(e => toast(e.message));
+function ttPostBox(c, host){
+  // TikTok's posting rules: show who posts, let the person choose who can see it (no default), and the interaction settings
+  host.innerHTML = ''; const box = el('div', 'signin-box'); host.append(box);
+  box.append(el('p', 'hint', 'Checking the TikTok account...'));
+  api('/api/tiktok/creator?campaign=' + encodeURIComponent(c.campaign), null, 'GET').then(info => {
+    box.innerHTML = '';
+    box.append(el('b', '', 'Post to TikTok as ' + (info.creator_nickname || '') + (info.creator_username ? ' (@' + info.creator_username + ')' : '')));
+    const r1 = el('div', 'row'); r1.style.alignItems = 'center'; r1.append(el('span', 'lbl', 'Who can see this video'));
+    const sel = el('select'); sel.append(Object.assign(el('option', '', 'Choose...'), { value: '' }));
+    (info.privacy_level_options || []).forEach(o => sel.append(Object.assign(el('option', '', TT_PRIV[o] || o), { value: o })));
+    r1.append(sel); box.append(r1);
+    const r2 = el('div', 'row'); const ck = {};
+    [['comment', 'Allow comments', info.comment_disabled], ['duet', 'Allow Duet', info.duet_disabled], ['stitch', 'Allow Stitch', info.stitch_disabled]].forEach(([k, t, off]) => {
+      const lab = el('label', 'hint'); const i = el('input'); i.type = 'checkbox'; i.checked = false; i.disabled = !!off; ck[k] = i;
+      lab.append(i, document.createTextNode(' ' + t + (off ? ' (turned off on this account)' : ''))); r2.append(lab); });
+    box.append(r2);
+    const legal = el('p', 'hint'); legal.innerHTML = 'By posting, you agree to TikTok\u2019s <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noopener">Music Usage Confirmation</a>.';
+    box.append(legal);
+    if (info.max_video_post_duration_sec) box.append(el('p', 'hint', 'This account can post videos up to ' + info.max_video_post_duration_sec + ' seconds.'));
+    const r3 = el('div', 'row'); const go = el('button', 'go', 'Post to TikTok'); go.type = 'button';
+    go.onclick = () => { if (!sel.value){ toast('Choose who can see this video'); return; }
+      api('/api/clips/' + c.id + '/social', { platform: 'tiktok', privacy: sel.value, comment: ck.comment.checked, duet: ck.duet.checked, stitch: ck.stitch.checked })
+        .then(() => { toast('Posting to TikTok'); host.innerHTML = ''; poll(true); }).catch(e => toast(e.message)); };
+    const cancel = el('button', 'btn', 'Cancel'); cancel.type = 'button'; cancel.onclick = () => { host.innerHTML = ''; };
+    r3.append(go, cancel); box.append(r3);
+  }).catch(e => { box.innerHTML = ''; box.append(el('p', 'bad-line', e.message)); });
+}
 let BULK = null;
 function bulkDone(cid, mode){
   if (mode === 'youtube'){ const y = ((YTS && YTS.campaigns) || []).find(c => c.id === cid); return !!(y && y.own); }
+  if (mode === 'tiktok') return !!ttCamp(cid).connected;
   const m = MS && MS[cid]; if (!m || !m.connected) return false;
   return mode === 'ig' ? !!m.instagram : true;
 }
-function bulkPlat(mode){ return mode === 'youtube' ? 'youtube' : 'instagram'; }
-async function bulkRefresh(){ if (BULK.mode === 'youtube') await loadYT(); else await loadMeta(); }
+function bulkPlat(mode){ return mode === 'youtube' ? 'youtube' : mode === 'tiktok' ? 'tiktok' : 'instagram'; }
+async function bulkRefresh(){ if (BULK.mode === 'youtube') await loadYT(); else if (BULK.mode === 'tiktok') await loadTT(); else await loadMeta(); }
 async function bulkStart(){
   const mode = $('#bulk-plat').value;
   if (mode === 'youtube'){ await loadYT(); if (!YTS || !YTS.has_secret){ toast('Add your Google file first (YouTube panel below)'); needYtSetup('#bulk-run'); return; } }
+  else if (mode === 'tiktok'){ await loadTT(); if (!TTS || !TTS.has_app){ toast('Do the one-time TikTok setup first'); $('#tt-setup').open = true; $('#tt-panel').scrollIntoView({ behavior: 'smooth' }); return; } }
   else { await loadMeta(); }
   const only = $('#bulk-only-trk').checked;
   const list = (S.campaigns || []).filter(c => !bulkDone(c.id, mode) && (!only || trkProfile(c.id, bulkPlat(mode))));
   if (!list.length){ toast(only ? 'Every client with a Trickster profile is already connected' : 'Every client is already connected'); return; }
-  BULK = { mode, list, i: 0, done: 0, skipped: 0, timer: null, pro: mode !== 'youtube' && $('#bulk-pro').checked, stage: '' };
+  BULK = { mode, list, i: 0, done: 0, skipped: 0, timer: null, pro: (mode === 'ig' || mode === 'meta') && $('#bulk-pro').checked, stage: '' };
   bulkStep();
 }
 function bulkStop(msg){ if (BULK && BULK.timer) clearInterval(BULK.timer); const b = BULK; BULK = null; loadPlatforms();
@@ -1508,9 +1595,9 @@ function bulkStep(){
   const b = BULK; if (!b) return;
   if (b.pro && b.stage !== 'signin') return bulkProStep();
   const c = b.list[b.i], plat = bulkPlat(b.mode), tp = trkProfile(c.id, plat);
-  const api_ = b.mode === 'youtube' ? '/api/youtube/connect' : '/api/meta/connect';
+  const api_ = b.mode === 'youtube' ? '/api/youtube/connect' : b.mode === 'tiktok' ? '/api/tiktok/connect' : '/api/meta/connect';
   const body = b.mode === 'youtube' ? { campaign: c.id, own: true } : b.mode === 'ig' ? { campaign: c.id, mode: 'ig' } : { campaign: c.id };
-  const label = b.mode === 'youtube' ? 'YouTube (Google)' : b.mode === 'ig' ? 'Instagram' : 'Facebook & Instagram';
+  const label = b.mode === 'youtube' ? 'YouTube (Google)' : b.mode === 'tiktok' ? 'TikTok' : b.mode === 'ig' ? 'Instagram' : 'Facebook & Instagram';
   const box = $('#bulk-run'); box.innerHTML = ''; const now = el('div', 'bulk-now');
   now.append(el('div', 'hint', 'Client ' + (b.i + 1) + ' of ' + b.list.length + ' · connected ' + b.done + (b.skipped ? ' · skipped ' + b.skipped : '')));
   const bar = el('div', 'bulk-bar'); const fill = el('i'); fill.style.width = Math.round(100 * b.i / b.list.length) + '%'; bar.append(fill); now.append(bar);
@@ -1560,6 +1647,7 @@ function platState(cid, p){
     if (p === 'instagram' && m && m.connected && m.instagram) return { on: true, label: '@' + m.instagram, email: em };
     if (p === 'facebook' && m && m.connected && m.mode !== 'ig') return { on: true, label: m.page, email: em };
     return { on: false, label: links[p] ? (p === 'instagram' ? '@' : '') + links[p] : '', email: '' }; }
+  if (p === 'tiktok'){ const t = ttCamp(cid); if (t.connected) return { on: true, label: '@' + (t.username || t.nickname || 'connected'), email: '' }; }
   return { on: !!links[p], label: links[p] ? '@' + links[p] : '', email: typed };
 }
 async function loadPlatforms(){
@@ -1567,6 +1655,7 @@ async function loadPlatforms(){
   await loadTrickster();
   if (!YTS || !YTS.campaigns) await loadYT();
   if (!MS) await loadMeta();
+  await loadTT();
   const g = $('#plat-grid'); g.innerHTML = '';
   (S.campaigns || []).forEach(c => {
     const row = el('div', 'plat-row'); row.append(el('b', 'plat-name', c.name));
@@ -1648,7 +1737,20 @@ function platDetail(c, p){
         box.append(tk); } }
     box.append(Object.assign(el('div'), { id: 'plat-detail-signin' }));
   } else if (p === 'tiktok'){
-    handleEditor('TikTok doesn’t let apps post publicly without its review, so you post with the TikTok upload page (signed in as this account). Save the account here so it’s on record for this campaign and on every laptop.', 'https://www.tiktok.com/tiktokstudio/upload');
+    if (TTS && TTS.has_app){
+      const after = () => { loadTT().then(loadPlatforms); }; const body = { campaign: c.id };
+      const trow = el('div', 'row'); trow.style.alignItems = 'center';
+      const go = el('button', st.on ? 'btn' : 'go', st.on ? 'Change TikTok' : 'Connect TikTok'); go.type = 'button';
+      go.onclick = () => startSignin('#plat-detail-signin', '/api/tiktok/connect', body, c.name, 'TikTok', after);
+      const cp = el('button', 'btn', 'Copy link'); cp.type = 'button'; cp.onclick = () => copySignin('#plat-detail-signin', '/api/tiktok/connect', body, c.name, 'TikTok', after);
+      trow.append(go, cp);
+      const tpt = trkProfile(c.id, 'tiktok');
+      if (tpt){ const tk = el('button', 'btn', 'Sign in inside Trickster profile ' + tpt); tk.type = 'button'; tk.onclick = () => trickSignin('#plat-detail-signin', '/api/tiktok/connect', body, c.name, 'TikTok', after, c.id, 'tiktok'); trow.append(tk); }
+      box.append(trow, Object.assign(el('div'), { id: 'plat-detail-signin' }));
+    } else {
+      box.append(el('p', 'hint', 'To post to TikTok from Clip Engine, do the one-time TikTok setup in "Post to TikTok from Clip Engine" below.'));
+    }
+    handleEditor('Until TikTok audits your app, posts from Clip Engine are private. You can always post with the TikTok upload page too (signed in as this account).', 'https://www.tiktok.com/tiktokstudio/upload');
   } else {
     handleEditor('X charges per post through its API, so post with the X compose page (signed in as this account). Save the account here so it’s on record for this campaign.', 'https://x.com/compose/post');
   }

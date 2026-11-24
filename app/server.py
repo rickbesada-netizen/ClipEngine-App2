@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pipeline as P  # noqa: E402
 import youtube as YT  # noqa: E402
 import meta as META  # noqa: E402
+import tiktok as TT  # noqa: E402
 import campaign_import as CI  # noqa: E402
 import kit as KIT  # noqa: E402
 import cloudsync as CS  # noqa: E402
@@ -1313,7 +1314,11 @@ def oauth_finish():
             q = parse_qs(urlparse(url).query)
             if q.get("error"):
                 raise RuntimeError(q.get("error_description", q["error"])[0])
-            cid = META.finish_login(q.get("code", [""])[0], q.get("state", [""])[0])
+            stt = q.get("state", [""])[0]
+            if TT.owns_state(stt):
+                cid = TT.finish_login(q.get("code", [""])[0], stt)
+                return jsonify(ok=True, platform="TikTok", campaign=campaign_by_id(cid)["name"])
+            cid = META.finish_login(q.get("code", [""])[0], stt)
             return jsonify(ok=True, platform="Facebook & Instagram", campaign=campaign_by_id(cid)["name"])
     except Exception as e:  # noqa: BLE001
         return jsonify(error=str(e)[:300]), 400
@@ -1732,6 +1737,15 @@ def meta_callback():
     if request.args.get("error"):
         msg = request.args.get("error_description") or request.args.get("error")
         return page.format(f"<h2>Not connected</h2><p>{html.escape(msg)}</p><p>Close this tab and press Connect again in Clip Engine.</p>")
+    if TT.owns_state(request.args.get("state", "")):
+        try:
+            cid = TT.finish_login(request.args.get("code", ""), request.args.get("state", ""))
+        except Exception as e:  # noqa: BLE001
+            return page.format(f"<h2>Not connected</h2><p>{html.escape(str(e))}</p>")
+        st = TT.public_status(cid)
+        who = f" <b>@{html.escape(st['username'])}</b>" if st.get("username") else ""
+        return page.format(f"<h2>Connected</h2><p><b>{html.escape(campaign_by_id(cid)['name'])}</b> now posts to TikTok{who}."
+                           "</p><p>You can close this tab.</p>")
     try:
         cid = META.finish_login(request.args.get("code", ""), request.args.get("state", ""))
         st = META.public_status(cid)
@@ -1747,6 +1761,48 @@ def meta_callback():
     ig = f" and Instagram @{html.escape(st['instagram'])}" if st["instagram"] else " (no Instagram account is linked to this Page)"
     return page.format(f"<h2>Connected</h2><p><b>{html.escape(name)}</b> now posts to the Facebook Page "
                        f"<b>{html.escape(st['page'])}</b>{ig}.</p><p>You can close this tab.</p>")
+
+
+@APP.get("/api/tiktok")
+def tiktok_state():
+    cfg = TT.app_config()
+    return jsonify(has_app=TT.has_app(), client_key=cfg.get("client_key", ""),
+                   campaigns=[{"id": c["id"], "name": c["name"], **TT.public_status(c["id"])} for c in campaigns()])
+
+
+@APP.post("/api/tiktok/app")
+def tiktok_app():
+    b = request.get_json(force=True) or {}
+    try:
+        TT.save_app(b.get("client_key", ""), b.get("client_secret", ""))
+    except TT.TikTokError as e:
+        return jsonify(error=str(e)), 400
+    share_keys()
+    return jsonify(ok=True)
+
+
+@APP.post("/api/tiktok/connect")
+def tiktok_connect():
+    cid = campaign_by_id((request.get_json(force=True) or {}).get("campaign"))["id"]
+    try:
+        return jsonify(url=TT.login_url(cid, RUN_PORT))
+    except TT.TikTokError as e:
+        return jsonify(error=str(e)), 400
+
+
+@APP.post("/api/tiktok/disconnect")
+def tiktok_disconnect():
+    TT.disconnect(campaign_by_id((request.get_json(force=True) or {}).get("campaign"))["id"])
+    return jsonify(ok=True)
+
+
+@APP.get("/api/tiktok/creator")
+def tiktok_creator():
+    """What TikTok allows for this account right now: shown in the post box (TikTok's posting rules require it)."""
+    try:
+        return jsonify(TT.creator_info(campaign_by_id(request.args.get("campaign"))["id"]))
+    except TT.TikTokError as e:
+        return jsonify(error=str(e)), 400
 
 
 @APP.post("/api/meta/choose")
@@ -1771,21 +1827,29 @@ def social_post(cid):
     c = clip_by_id(cid)
     if not c:
         return jsonify(error="Not found"), 404
-    platform = (request.get_json(force=True) or {}).get("platform")
-    if platform not in ("instagram", "facebook"):
+    body = request.get_json(force=True) or {}
+    platform = body.get("platform")
+    if platform not in ("instagram", "facebook", "tiktok"):
         return jsonify(error="Unknown platform"), 400
+    if platform == "tiktok" and not body.get("privacy"):
+        return jsonify(error="Choose who can see this video on TikTok."), 400
     if not clip_path(c).exists():
         return jsonify(error="The video file isn't on this laptop."), 400
     social = c.setdefault("social", {})
     if (social.get(platform) or {}).get("state") == "uploading":
         return jsonify(error="Already posting"), 400
     social[platform] = {"state": "uploading", "progress": 0}
-    label = {"instagram": "Instagram Reels", "facebook": "Facebook Reels"}[platform]
+    label = {"instagram": "Instagram Reels", "facebook": "Facebook Reels", "tiktok": "TikTok"}[platform]
 
     def run():
         try:
-            fn = META.post_instagram if platform == "instagram" else META.post_facebook
-            r = fn(c["campaign"], clip_path(c), c.get("caption", ""), lambda f: social[platform].update(progress=round(f, 3)))
+            prog = lambda f: social[platform].update(progress=round(f, 3))  # noqa: E731
+            if platform == "tiktok":
+                r = TT.post_video(c["campaign"], clip_path(c), c.get("caption", ""), body["privacy"],
+                                  bool(body.get("comment", True)), bool(body.get("duet", True)), bool(body.get("stitch", True)), prog)
+            else:
+                fn = META.post_instagram if platform == "instagram" else META.post_facebook
+                r = fn(c["campaign"], clip_path(c), c.get("caption", ""), prog)
             with LOCK:
                 social[platform] = {"state": "done", "progress": 1, **r}
                 c["posts"].append({"platform": label, "url": r["url"], "at": time.time(), "auto": True})
@@ -2522,6 +2586,9 @@ def share_keys():
         cfg = {k: v for k, v in META.app_config().items() if k in _META_KEYS and v}
         if cfg and {k: v for k, v in (st.get("_meta_app") or {}).items()} != {**(st.get("_meta_app") or {}), **cfg}:
             st["_meta_app"] = {**(st.get("_meta_app") or {}), **cfg}; changed = True
+        tcfg = TT.app_config()
+        if tcfg.get("client_key") and st.get("_tiktok_app") != tcfg:
+            st["_tiktok_app"] = tcfg; changed = True
         try:
             sec = json.loads(YT.SECRET.read_text(encoding="utf-8")) if YT.SECRET.exists() else None
         except Exception:  # noqa: BLE001
@@ -2542,6 +2609,12 @@ def restore_keys():
         if add:
             cfg.update(add)
             META.CONFIG.write_text(json.dumps(cfg), encoding="utf-8")
+    ta = st.get("_tiktok_app") or {}
+    if ta.get("client_key") and not TT.has_app():
+        try:
+            TT.save_app(ta.get("client_key", ""), ta.get("client_secret", ""))
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
     ys = st.get("_yt_secret")
     if ys and not YT.SECRET.exists():
         try:
